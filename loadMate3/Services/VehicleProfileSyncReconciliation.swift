@@ -33,6 +33,7 @@ enum VehicleProfileSyncReconciliation {
                 )
                 mergeProfile(loser, into: winner, appState: appState, in: context)
                 VehiclePlatePhotoStore.deleteFiles(forVehicleID: loser.id)
+                CloudKitSidecarPhotoSync.shared.deletePlate(profileID: loser.id)
                 context.delete(loser)
                 didChange = true
             }

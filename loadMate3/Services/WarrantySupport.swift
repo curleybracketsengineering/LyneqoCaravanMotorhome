@@ -110,7 +110,24 @@ enum WarrantySupport {
     }
 
     static func plan(for vehicleID: UUID, from plans: [WarrantyPlan]) -> WarrantyPlan? {
-        plans.first { $0.vehicleID == vehicleID }
+        let matches = plans.filter { $0.vehicleID == vehicleID }
+        return matches.max(by: { retentionScore(for: $0) < retentionScore(for: $1) })
+    }
+
+    /// Prefers a plan with completed work, photos, and costs over an empty generated template.
+    static func retentionScore(for plan: WarrantyPlan) -> Int {
+        let events = plan.eventsList
+        var score = 0
+        score += events.filter { $0.completedDate != nil }.count * 1_000
+        score += events.reduce(0) { $0 + $1.attachmentsList.count } * 400
+        score += events.filter { ($0.actualCost ?? 0) > 0 }.count * 300
+        score += events.filter(\.isManual).count * 200
+        score += events.filter { !$0.isCostItem }.count * 10
+        if !plan.manufacturer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            score += 5
+        }
+        score += Int(plan.updatedAt.timeIntervalSince1970 / 1_000_000)
+        return score
     }
 
     static func events(for vehicleID: UUID, from plans: [WarrantyPlan]) -> [WarrantyEvent] {

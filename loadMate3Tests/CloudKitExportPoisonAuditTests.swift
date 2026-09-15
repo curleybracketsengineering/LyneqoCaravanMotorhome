@@ -148,17 +148,19 @@ final class CloudKitExportPoisonAuditTests: XCTestCase {
         XCTAssertEqual(SyncDebugTestCatalog.watchVehicle, 30)
         XCTAssertEqual(SyncDebugTestCatalog.documentOnlyCanary, 32)
         XCTAssertEqual(SyncDebugTestCatalog.attachmentMetaCanary, 33)
+        XCTAssertEqual(SyncDebugTestCatalog.sidecarCKAssetCanary, 34)
         XCTAssertTrue(SyncDebugTestCatalog.indexText.contains("18. Run Tiny Asset Canary"))
         XCTAssertTrue(SyncDebugTestCatalog.indexText.contains("19. Run Tiny Asset Canary With Thumbnail"))
         XCTAssertTrue(SyncDebugTestCatalog.indexText.contains("32. Run Document Canary (No File)"))
         XCTAssertTrue(SyncDebugTestCatalog.indexText.contains("33. Run Attachment Canary (No Bytes)"))
+        XCTAssertTrue(SyncDebugTestCatalog.indexText.contains("34. Run Sidecar CKAsset Canary"))
         XCTAssertTrue(SyncDebugTestCatalog.title(5, "Compare Local vs CloudKit").hasPrefix("5. "))
         let numbers = SyncDebugTestCatalog.indexLines.compactMap { line -> Int? in
             Int(line.split(separator: ".", maxSplits: 1).first ?? "")
         }
         XCTAssertEqual(numbers, numbers.sorted())
         XCTAssertEqual(numbers.first, 1)
-        XCTAssertEqual(numbers.last, 33)
+        XCTAssertEqual(numbers.last, 34)
     }
 
     private func makeContext() throws -> ModelContext {

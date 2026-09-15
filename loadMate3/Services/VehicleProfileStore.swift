@@ -152,7 +152,27 @@ enum VehicleProfileStore {
     ) {
         guard profiles.count > 1 else { return }
         let wasActive = appState.activeProfileID == profile.id
-        VehiclePlatePhotoStore.deleteFiles(forVehicleID: profile.id)
+        let profileID = profile.id
+        let attachmentIDs = ((try? context.fetch(FetchDescriptor<MaintenanceAttachment>())) ?? [])
+            .filter { $0.vehicleID == profileID }
+            .map { ($0.id, $0.thumbnailFileName != nil) }
+        let accidentIDs = ((try? context.fetch(FetchDescriptor<AccidentPhoto>())) ?? [])
+            .filter { $0.vehicleID == profileID }
+            .map(\.id)
+        let tyreIDs = ((try? context.fetch(FetchDescriptor<TyrePhoto>())) ?? [])
+            .filter { $0.tyreRecord?.vehicleID == profileID }
+            .map(\.id)
+        VehiclePlatePhotoStore.deleteFiles(forVehicleID: profileID)
+        CloudKitSidecarPhotoSync.shared.deletePlate(profileID: profileID)
+        for (id, includingThumbnail) in attachmentIDs {
+            CloudKitSidecarPhotoSync.shared.deleteAttachment(id: id, includingThumbnail: includingThumbnail)
+        }
+        for id in accidentIDs {
+            CloudKitSidecarPhotoSync.shared.deleteAccidentPhoto(id: id)
+        }
+        for id in tyreIDs {
+            CloudKitSidecarPhotoSync.shared.deleteTyrePhoto(id: id)
+        }
         context.delete(profile)
         if let counts = CloudSyncMonitor.shared.currentEntityCounts() {
             CloudKitDeletionSyncVerifier.shared.noteLocalDeletion(of: profile.id, counts: counts)

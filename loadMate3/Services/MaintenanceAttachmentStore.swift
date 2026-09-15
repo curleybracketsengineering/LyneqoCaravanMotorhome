@@ -177,6 +177,7 @@ enum MaintenanceAttachmentStore {
 
         context.insert(attachment)
         try context.save()
+        CloudKitSidecarPhotoSync.shared.uploadAttachment(attachment)
         return attachment
     }
 
@@ -190,6 +191,7 @@ enum MaintenanceAttachmentStore {
         if let data = loadLocalFileData(for: attachment) {
             return data
         }
+        CloudKitSidecarPhotoSync.shared.downloadAttachmentIfNeeded(attachment)
         return PhotoSyncSupport.nonEmpty(attachment.fileData)
     }
 
@@ -266,6 +268,7 @@ enum MaintenanceAttachmentStore {
            let image = UIImage(data: data) {
             return image
         }
+        CloudKitSidecarPhotoSync.shared.downloadAttachmentIfNeeded(attachment)
         if let data = PhotoSyncSupport.nonEmpty(attachment.thumbnailData),
            let image = UIImage(data: data) {
             return image
@@ -280,6 +283,8 @@ enum MaintenanceAttachmentStore {
     }
 
     static func delete(_ attachment: MaintenanceAttachment, in context: ModelContext) {
+        let attachmentID = attachment.id
+        let includingThumbnail = attachment.thumbnailFileName != nil
         if let url = try? fileURL(vehicleID: attachment.vehicleID, fileName: attachment.localFileName) {
             try? FileManager.default.removeItem(at: url)
         }
@@ -289,6 +294,7 @@ enum MaintenanceAttachmentStore {
         }
         context.delete(attachment)
         try? context.save()
+        CloudKitSidecarPhotoSync.shared.deleteAttachment(id: attachmentID, includingThumbnail: includingThumbnail)
     }
 
     static func resize(image: UIImage, maxDimension: CGFloat) -> UIImage {

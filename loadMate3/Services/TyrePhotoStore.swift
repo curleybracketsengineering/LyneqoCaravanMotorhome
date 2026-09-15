@@ -56,6 +56,7 @@ enum TyrePhotoStore {
         photo.imageData = nil
         context.insert(photo)
         try context.save()
+        CloudKitSidecarPhotoSync.shared.uploadTyrePhoto(photo, vehicleID: vehicleID)
         return photo
     }
 
@@ -82,6 +83,7 @@ enum TyrePhotoStore {
         if let data = loadLocalFileData(for: photo, vehicleID: vehicleID) {
             return data
         }
+        CloudKitSidecarPhotoSync.shared.downloadTyrePhotoIfNeeded(photo, vehicleID: vehicleID)
         return PhotoSyncSupport.nonEmpty(photo.imageData)
     }
 
@@ -121,11 +123,13 @@ enum TyrePhotoStore {
     }
 
     static func delete(photo: TyrePhoto, vehicleID: UUID, in context: ModelContext) {
+        let photoID = photo.id
         if let url = try? fileURL(vehicleID: vehicleID, fileName: photo.localFileName) {
             try? FileManager.default.removeItem(at: url)
         }
         context.delete(photo)
         try? context.save()
+        CloudKitSidecarPhotoSync.shared.deleteTyrePhoto(id: photoID)
     }
 
     static func photos(for record: TyreRecord, inspection: TyreInspection?) -> [TyrePhoto] {

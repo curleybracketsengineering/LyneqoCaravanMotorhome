@@ -3,6 +3,7 @@ import SwiftData
 
 struct RootView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.scenePhase) private var scenePhase
     
     @Query private var appStates: [AppState]
     @Query private var profiles: [VehicleProfile]
@@ -33,6 +34,7 @@ struct RootView: View {
             StartupCensus.log("app launch before startup logic", in: modelContext)
             let state = AppStateStore.resolve(in: modelContext, existing: appStates)
             PhotoSyncMigration.offloadCloudKitAssetBytesIfNeeded(in: modelContext)
+            CloudKitSidecarPhotoSync.shared.reconcile(in: modelContext, includeUploads: true)
             let didReconcile = VehicleProfileSyncReconciliation.reconcile(in: modelContext, appState: state)
             if didReconcile {
                 SyncDebugLogger.shared.record(
@@ -40,8 +42,13 @@ struct RootView: View {
                     message: "[migration] VehicleProfileSyncReconciliation changed local profiles"
                 )
             }
+            _ = WarrantyStore.mergeDuplicatePlans(in: modelContext)
             resolvedState = disclaimerVM.ensureAppState(in: modelContext, existing: state)
             StartupCensus.log("app launch after startup logic", in: modelContext)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, resolvedState?.disclaimerAccepted == true else { return }
+            CloudKitSidecarPhotoSync.shared.reconcileDownloads(in: modelContext)
         }
     }
 }

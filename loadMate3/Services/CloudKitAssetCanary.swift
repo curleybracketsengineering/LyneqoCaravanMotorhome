@@ -213,6 +213,16 @@ final class CloudKitAssetCanary: ObservableObject {
         finish(report)
     }
 
+    func runSidecarCKAssetCanary() async {
+        guard !isRunning else { return }
+        isRunning = true
+        defer { isRunning = false }
+
+        logger("Started 34. Sidecar CKAsset Canary")
+        let report = await CloudKitSidecarAssetCanary.run()
+        finish(report)
+    }
+
     private func activeProfile(in context: ModelContext) -> VehicleProfile? {
         let profiles = (try? context.fetch(FetchDescriptor<VehicleProfile>())) ?? []
         let states = (try? context.fetch(FetchDescriptor<AppState>())) ?? []

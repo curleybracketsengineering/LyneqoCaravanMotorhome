@@ -47,6 +47,7 @@ enum VehiclePlatePhotoStore {
         if let data = loadLocalFileData(for: profile) {
             return data
         }
+        CloudKitSidecarPhotoSync.shared.downloadPlateIfNeeded(profile)
         return PhotoSyncSupport.nonEmpty(profile.manufacturerPlatePhotoData)
     }
 
@@ -86,9 +87,11 @@ enum VehiclePlatePhotoStore {
     }
 
     static func delete(for profile: VehicleProfile) {
-        deleteFiles(forVehicleID: profile.id)
+        let profileID = profile.id
+        deleteFiles(forVehicleID: profileID)
         profile.manufacturerPlatePhotoFileName = ""
         profile.manufacturerPlatePhotoData = nil
+        CloudKitSidecarPhotoSync.shared.deletePlate(profileID: profileID)
     }
 
     static func deleteFiles(forVehicleID vehicleID: UUID) {
@@ -124,6 +127,7 @@ enum VehiclePlatePhotoStore {
         try data.write(to: url, options: .atomic)
         profile.manufacturerPlatePhotoFileName = fileName
         profile.manufacturerPlatePhotoData = nil
+        CloudKitSidecarPhotoSync.shared.uploadPlate(profile)
         return fileName
     }
 }

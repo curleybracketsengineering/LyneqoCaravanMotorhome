@@ -191,6 +191,7 @@ enum SyncDebugTestCatalog {
     static let checkWatchedVehicle = 31
     static let documentOnlyCanary = 32
     static let attachmentMetaCanary = 33
+    static let sidecarCKAssetCanary = 34
 
     static func title(_ number: Int, _ name: String) -> String {
         "\(number). \(name)"
@@ -226,6 +227,7 @@ enum SyncDebugTestCatalog {
             title(checkWatchedVehicle, "Check whether watched vehicle reappeared"),
             title(documentOnlyCanary, "Run Document Canary (No File)"),
             title(attachmentMetaCanary, "Run Attachment Canary (No Bytes)"),
+            title(sidecarCKAssetCanary, "Run Sidecar CKAsset Canary"),
         ]
     }
 

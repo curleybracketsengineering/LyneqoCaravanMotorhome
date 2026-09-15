@@ -187,6 +187,48 @@ enum WarrantyStore {
         try? context.save()
     }
 
+    /// Keeps one service plan per vehicle after iCloud duplicates. Prefers completed work and photos.
+    @MainActor
+    @discardableResult
+    static func mergeDuplicatePlans(in context: ModelContext) -> Bool {
+        let plans = (try? context.fetch(FetchDescriptor<WarrantyPlan>())) ?? []
+        let groups = Dictionary(grouping: plans, by: \.vehicleID)
+        var didChange = false
+
+        for (_, cluster) in groups where cluster.count > 1 {
+            let ranked = cluster.sorted {
+                WarrantySupport.retentionScore(for: $0) > WarrantySupport.retentionScore(for: $1)
+            }
+            guard let winner = ranked.first else { continue }
+            let winnerHasCompleted = winner.eventsList.contains { $0.completedDate != nil }
+
+            for loser in ranked.dropFirst() {
+                let loserHasCompleted = loser.eventsList.contains { $0.completedDate != nil }
+                if winnerHasCompleted && !loserHasCompleted {
+                    for event in loser.eventsList {
+                        remove(event: event, in: context)
+                    }
+                } else {
+                    for event in loser.eventsList {
+                        event.plan = winner
+                        event.vehicleID = winner.vehicleID
+                    }
+                }
+                context.delete(loser)
+                didChange = true
+            }
+        }
+
+        if didChange {
+            try? context.save()
+            SyncDebugLogger.shared.record(
+                category: "startup",
+                message: "[migration] merged duplicate WarrantyPlan records for the same vehicle"
+            )
+        }
+        return didChange
+    }
+
     static func generateAnnualEvents(
         plan: WarrantyPlan,
         in context: ModelContext,

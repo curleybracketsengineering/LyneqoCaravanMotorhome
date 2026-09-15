@@ -17,6 +17,52 @@ final class WarrantySupportTests: XCTestCase {
         context = nil
     }
 
+    func testPlanPrefersCompletedWorkOverEmptyTemplate() {
+        let vehicleID = UUID()
+        let empty = WarrantyPlan(vehicleID: vehicleID)
+        context.insert(empty)
+        let generated = WarrantyEvent(vehicleID: vehicleID)
+        generated.plan = empty
+        generated.yearNumber = 1
+        context.insert(generated)
+
+        let used = WarrantyPlan(vehicleID: vehicleID)
+        context.insert(used)
+        let done = WarrantyEvent(vehicleID: vehicleID)
+        done.plan = used
+        done.completedDate = Date()
+        done.requirementDescription = "Annual habitation service"
+        context.insert(done)
+
+        let chosen = WarrantySupport.plan(for: vehicleID, from: [empty, used])
+        XCTAssertEqual(chosen?.id, used.id)
+    }
+
+    func testMergeDuplicatePlansDropsEmptyTemplate() throws {
+        let vehicleID = UUID()
+        let empty = WarrantyPlan(vehicleID: vehicleID)
+        context.insert(empty)
+        let generated = WarrantyEvent(vehicleID: vehicleID)
+        generated.plan = empty
+        generated.yearNumber = 1
+        context.insert(generated)
+
+        let used = WarrantyPlan(vehicleID: vehicleID)
+        context.insert(used)
+        let done = WarrantyEvent(vehicleID: vehicleID)
+        done.plan = used
+        done.completedDate = Date()
+        context.insert(done)
+        try context.save()
+
+        XCTAssertTrue(WarrantyStore.mergeDuplicatePlans(in: context))
+        let remaining = try context.fetch(FetchDescriptor<WarrantyPlan>())
+        XCTAssertEqual(remaining.count, 1)
+        XCTAssertEqual(remaining.first?.id, used.id)
+        XCTAssertEqual(remaining.first?.eventsList.count, 1)
+        XCTAssertNotNil(remaining.first?.eventsList.first?.completedDate)
+    }
+
     func testGenerateAnnualEventsCreatesEightYearlyEvents() throws {
         let vehicleID = UUID()
         let purchaseDate = Calendar.current.date(from: DateComponents(year: 2020, month: 3, day: 12))!

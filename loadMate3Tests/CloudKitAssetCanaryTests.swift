@@ -1,3 +1,4 @@
+import CloudKit
 import SwiftData
 import UniformTypeIdentifiers
 import XCTest
@@ -17,6 +18,20 @@ final class CloudKitAssetCanaryTests: XCTestCase {
         XCTAssertEqual(CloudKitDiagnosticMarkers.isClearlyDiagnosticName(CloudKitAssetCanary.documentTitle), CloudKitDiagnosticMarkers.namePrefix)
         XCTAssertTrue(CloudKitAssetCanary.documentOnlyTitle.hasPrefix(CloudKitDiagnosticMarkers.namePrefix))
         XCTAssertEqual(CloudKitDiagnosticMarkers.isClearlyDiagnosticName(CloudKitAssetCanary.attachmentMetaName), CloudKitDiagnosticMarkers.namePrefix)
+        XCTAssertEqual(CloudKitDiagnosticMarkers.isClearlyDiagnosticName(CloudKitSidecarAssetCanary.markerValue), CloudKitDiagnosticMarkers.namePrefix)
+        XCTAssertEqual(CloudKitSidecarAssetCanary.recordType, "LyneqoSidecarPhotoCanary")
+        XCTAssertEqual(CloudKitSidecarAssetCanary.assetField, "jpeg")
+    }
+
+    func testSidecarCanaryWritesJPEGFileForCKAsset() throws {
+        let jpeg = CloudKitAssetCanary.makeTinyJPEG()
+        let url = try CloudKitSidecarAssetCanary.writeTemporaryJPEG(jpeg)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        XCTAssertEqual(try Data(contentsOf: url), jpeg)
+        let asset = CKAsset(fileURL: url)
+        XCTAssertEqual(asset.fileURL?.path, url.path)
     }
 
     func testAuditFindsCanaryDocumentAndAttachment() throws {

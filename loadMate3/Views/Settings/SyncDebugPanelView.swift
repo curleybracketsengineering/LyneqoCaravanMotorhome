@@ -32,7 +32,7 @@ struct SyncDebugPanelView: View {
                     AppHeroSection(
                         systemImage: "ladybug",
                         title: "Sync Debug",
-                        subtitle: "Hidden developer-only iCloud diagnostics. Tests are numbered 1 to 33 from top to bottom."
+                        subtitle: "Hidden developer-only iCloud diagnostics. Tests are numbered 1 to 34 from top to bottom."
                     )
 
                     numberedTestsSection()
@@ -67,7 +67,7 @@ struct SyncDebugPanelView: View {
     private func numberedTestsSection() -> some View {
         AppSettingsSection(
             "Tests",
-            caption: "In number order from 1 to 33. First attachment test today is 33."
+            caption: "In number order from 1 to 34. Next photo-sync test is 34."
         ) {
             VStack(alignment: .leading, spacing: AppScreenMetrics.controlSpacing) {
                 AppSecondaryButton(SyncDebugTestCatalog.title(SyncDebugTestCatalog.refreshICloud, "Refresh iCloud Status")) {
@@ -218,7 +218,7 @@ struct SyncDebugPanelView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("18 is a tiny JPEG. 32 is a document with no file (passed). 33 is an attachment row with no bytes. Do not run 18 or 19 until 33 has a result.")
+                Text("18 is a SwiftData JPEG (failed). 32 and 33 are metadata (passed). 34 proved a standalone CKAsset works. Real photos now upload on that sidecar path after you save them.")
                     .font(.caption)
                     .foregroundStyle(AppColors.textSupporting)
                     .fixedSize(horizontal: false, vertical: true)
@@ -316,6 +316,19 @@ struct SyncDebugPanelView: View {
                     }
                 }
                 .disabled(assetCanary.isRunning)
+
+                AppSecondaryButton(SyncDebugTestCatalog.title(SyncDebugTestCatalog.sidecarCKAssetCanary, "Run Sidecar CKAsset Canary")) {
+                    Task {
+                        await assetCanary.runSidecarCKAssetCanary()
+                    }
+                }
+                .disabled(assetCanary.isRunning)
+
+                Text(assetCanary.lastReport)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(Color.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 #if DEBUG
                 Toggle("Suppress automatic seeding", isOn: $suppressAutomaticSeeding)

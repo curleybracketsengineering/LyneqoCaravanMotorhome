@@ -58,6 +58,7 @@ enum AccidentPhotoStore {
         context.insert(photo)
         record.updatedAt = Date()
         try context.save()
+        CloudKitSidecarPhotoSync.shared.uploadAccidentPhoto(photo)
         return photo
     }
 
@@ -65,6 +66,7 @@ enum AccidentPhotoStore {
         if let data = loadLocalFileData(for: photo, vehicleID: vehicleID) {
             return data
         }
+        CloudKitSidecarPhotoSync.shared.downloadAccidentPhotoIfNeeded(photo)
         return PhotoSyncSupport.nonEmpty(photo.imageData)
     }
 
@@ -112,6 +114,7 @@ enum AccidentPhotoStore {
         if let url = try? fileURL(vehicleID: vehicleID, fileName: photo.localFileName) {
             try? FileManager.default.removeItem(at: url)
         }
+        let photoID = photo.id
         if let record = photo.record {
             record.updatedAt = Date()
         }
@@ -119,6 +122,7 @@ enum AccidentPhotoStore {
         if saveContext {
             try? context.save()
         }
+        CloudKitSidecarPhotoSync.shared.deleteAccidentPhoto(id: photoID)
     }
 
     static func photos(of kind: AccidentPhotoKind, on record: AccidentRecord) -> [AccidentPhoto] {

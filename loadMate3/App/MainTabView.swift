@@ -12,6 +12,7 @@ enum AppTab: Hashable {
 struct MainTabView: View {
     @Query private var profiles: [VehicleProfile]
     @Query private var appStates: [AppState]
+    @ObservedObject private var sidecarPhotos = CloudKitSidecarPhotoSync.shared
 
     @State private var selectedTab: AppTab = .home
     @State private var selectedPadTab: PadTab = .summary
@@ -32,6 +33,7 @@ struct MainTabView: View {
     }
 
     var body: some View {
+        let _ = sidecarPhotos.revision
         Group {
             if isPadLayoutActive {
                 padTabRoot(availableWidth: padAvailableWidth)

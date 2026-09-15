@@ -663,6 +663,7 @@ final class CloudSyncMonitor: ObservableObject {
         )
         if let context = modelContext {
           CloudKitDeletionSyncVerifier.shared.noteImport(in: context)
+          CloudKitSidecarPhotoSync.shared.reconcileDownloads(in: context)
         }
       case .exportToCloud:
         lastSuccessfulExportAt = finishedAt
