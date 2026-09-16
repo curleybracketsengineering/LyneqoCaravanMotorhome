@@ -187,6 +187,26 @@ enum MaintenanceAttachmentStore {
         }
     }
 
+    static func reassign(_ attachment: MaintenanceAttachment, to vehicleID: UUID) {
+        guard attachment.vehicleID != vehicleID else { return }
+        let oldID = attachment.vehicleID
+        PhotoSyncSupport.moveFile(
+            fromVehicle: oldID,
+            toVehicle: vehicleID,
+            fileName: attachment.localFileName,
+            fileURL: fileURL
+        )
+        if let thumbnailFileName = attachment.thumbnailFileName {
+            PhotoSyncSupport.moveFile(
+                fromVehicle: oldID,
+                toVehicle: vehicleID,
+                fileName: thumbnailFileName,
+                fileURL: fileURL
+            )
+        }
+        attachment.vehicleID = vehicleID
+    }
+
     static func loadData(for attachment: MaintenanceAttachment) -> Data? {
         if let data = loadLocalFileData(for: attachment) {
             return data

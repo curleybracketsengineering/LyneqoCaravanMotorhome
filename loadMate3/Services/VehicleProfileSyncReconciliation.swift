@@ -44,6 +44,15 @@ enum VehicleProfileSyncReconciliation {
             }
         }
 
+        let currentProfiles = fetchProfiles(in: context)
+        if recoverOrphanedVehicleScopedRecords(
+            in: context,
+            profiles: currentProfiles,
+            activeProfileID: appState.activeProfileID
+        ) {
+            didChange = true
+        }
+
         if didChange {
             if appState.activeProfileID == nil {
                 appState.activeProfileID = VehicleProfileStore.sortedProfiles(fetchProfiles(in: context)).first?.id
@@ -167,6 +176,14 @@ enum VehicleProfileSyncReconciliation {
             }
         }
 
+        reassignVehicleScopedRecords(from: source.id, to: target.id, in: context)
+
+        if target.checklistSectionsList.isEmpty {
+            for section in source.checklistSectionsList {
+                section.profile = target
+            }
+        }
+
         if appState.activeProfileID == source.id {
             appState.activeProfileID = target.id
         }
@@ -175,6 +192,143 @@ enum VehicleProfileSyncReconciliation {
            target.tripsList.contains(where: { $0.id == sourceTripID }) {
             target.activeTripID = sourceTripID
         }
+    }
+
+    /// Documents, maintenance, warranty and similar records key off `vehicleID`.
+    /// Without this, iCloud profile merges hide them from the surviving vehicle.
+    @discardableResult
+    static func reassignVehicleScopedRecords(
+        from oldID: UUID,
+        to newID: UUID,
+        in context: ModelContext
+    ) -> Bool {
+        guard oldID != newID else { return false }
+        var didChange = false
+
+        for document in fetch(DocumentRecord.self, in: context) where document.vehicleID == oldID {
+            document.vehicleID = newID
+            didChange = true
+        }
+        for record in fetch(MaintenanceRecord.self, in: context) where record.vehicleID == oldID {
+            record.vehicleID = newID
+            didChange = true
+        }
+        for record in fetch(FaultRecord.self, in: context) where record.vehicleID == oldID {
+            record.vehicleID = newID
+            didChange = true
+        }
+        for attachment in fetch(MaintenanceAttachment.self, in: context) where attachment.vehicleID == oldID {
+            MaintenanceAttachmentStore.reassign(attachment, to: newID)
+            didChange = true
+        }
+        for plan in fetch(WarrantyPlan.self, in: context) where plan.vehicleID == oldID {
+            plan.vehicleID = newID
+            didChange = true
+        }
+        for event in fetch(WarrantyEvent.self, in: context) where event.vehicleID == oldID {
+            event.vehicleID = newID
+            didChange = true
+        }
+        for tyre in fetch(TyreRecord.self, in: context) where tyre.vehicleID == oldID {
+            for photo in tyre.photos ?? [] {
+                TyrePhotoStore.reassign(photo, from: oldID, to: newID)
+            }
+            tyre.vehicleID = newID
+            didChange = true
+        }
+        for accident in fetch(AccidentRecord.self, in: context) where accident.vehicleID == oldID {
+            accident.vehicleID = newID
+            didChange = true
+        }
+        for photo in fetch(AccidentPhoto.self, in: context) where photo.vehicleID == oldID {
+            AccidentPhotoStore.reassign(photo, to: newID)
+            didChange = true
+        }
+
+        return didChange
+    }
+
+    /// Picks up documents left on a deleted duplicate vehicle after an earlier merge.
+    @discardableResult
+    static func recoverOrphanedVehicleScopedRecords(
+        in context: ModelContext,
+        profiles: [VehicleProfile],
+        activeProfileID: UUID?
+    ) -> Bool {
+        let validIDs = Set(profiles.map(\.id))
+        guard !validIDs.isEmpty else { return false }
+        var didChange = false
+
+        let events = fetch(WarrantyEvent.self, in: context)
+        let documents = fetch(DocumentRecord.self, in: context)
+
+        for document in documents where !validIDs.contains(document.vehicleID) {
+            if let event = events.first(where: {
+                validIDs.contains($0.vehicleID) && $0.linkedDocumentIDs.contains(document.id)
+            }) {
+                document.vehicleID = event.vehicleID
+                didChange = true
+                continue
+            }
+            if let ownerID = document.attachmentsList.first(where: { validIDs.contains($0.vehicleID) })?.vehicleID {
+                document.vehicleID = ownerID
+                didChange = true
+            }
+        }
+
+        for attachment in fetch(MaintenanceAttachment.self, in: context) {
+            let ownerID = attachment.documentRecord?.vehicleID
+                ?? attachment.maintenanceRecord?.vehicleID
+                ?? attachment.faultRecord?.vehicleID
+                ?? attachment.warrantyEvent?.vehicleID
+            if let ownerID, attachment.vehicleID != ownerID {
+                MaintenanceAttachmentStore.reassign(attachment, to: ownerID)
+                didChange = true
+            }
+        }
+
+        for photo in fetch(AccidentPhoto.self, in: context) {
+            if let ownerID = photo.record?.vehicleID, photo.vehicleID != ownerID {
+                AccidentPhotoStore.reassign(photo, to: ownerID)
+                didChange = true
+            }
+        }
+
+        let leftoverIDs = Set(
+            documents.map(\.vehicleID)
+                + fetch(MaintenanceRecord.self, in: context).map(\.vehicleID)
+                + fetch(WarrantyPlan.self, in: context).map(\.vehicleID)
+        ).subtracting(validIDs)
+
+        if leftoverIDs.count == 1,
+           let oldID = leftoverIDs.first,
+           let newID = adoptionTarget(profiles: profiles, activeProfileID: activeProfileID) {
+            if reassignVehicleScopedRecords(from: oldID, to: newID, in: context) {
+                didChange = true
+            }
+        }
+
+        return didChange
+    }
+
+    private static func adoptionTarget(
+        profiles: [VehicleProfile],
+        activeProfileID: UUID?
+    ) -> UUID? {
+        if profiles.count == 1 { return profiles[0].id }
+        let configured = profiles.filter(\.isConfiguredForWeightCalculations)
+        if configured.count == 1 { return configured[0].id }
+        if let activeProfileID,
+           configured.count <= 1,
+           let active = profiles.first(where: { $0.id == activeProfileID }),
+           configured.isEmpty || configured.contains(where: { $0.id == active.id }) {
+            return active.id
+        }
+        return nil
+    }
+
+    private static func fetch<Model: PersistentModel>(_ type: Model.Type, in context: ModelContext) -> [Model] {
+        (try? context.fetch(FetchDescriptor<Model>())) ?? []
     }
 
     private static func mergeSettings(from source: VehicleProfile, into target: VehicleProfile) {

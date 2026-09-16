@@ -125,6 +125,17 @@ enum AccidentPhotoStore {
         CloudKitSidecarPhotoSync.shared.deleteAccidentPhoto(id: photoID)
     }
 
+    static func reassign(_ photo: AccidentPhoto, to vehicleID: UUID) {
+        guard photo.vehicleID != vehicleID else { return }
+        PhotoSyncSupport.moveFile(
+            fromVehicle: photo.vehicleID,
+            toVehicle: vehicleID,
+            fileName: photo.localFileName,
+            fileURL: fileURL
+        )
+        photo.vehicleID = vehicleID
+    }
+
     static func photos(of kind: AccidentPhotoKind, on record: AccidentRecord) -> [AccidentPhoto] {
         record.photosList.filter { $0.kind == kind }
     }

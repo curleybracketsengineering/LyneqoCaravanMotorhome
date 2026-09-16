@@ -132,6 +132,16 @@ enum TyrePhotoStore {
         CloudKitSidecarPhotoSync.shared.deleteTyrePhoto(id: photoID)
     }
 
+    static func reassign(_ photo: TyrePhoto, from oldVehicleID: UUID, to newVehicleID: UUID) {
+        guard oldVehicleID != newVehicleID else { return }
+        PhotoSyncSupport.moveFile(
+            fromVehicle: oldVehicleID,
+            toVehicle: newVehicleID,
+            fileName: photo.localFileName,
+            fileURL: fileURL
+        )
+    }
+
     static func photos(for record: TyreRecord, inspection: TyreInspection?) -> [TyrePhoto] {
         if let inspection {
             return record.photosList.filter { $0.inspection?.id == inspection.id }

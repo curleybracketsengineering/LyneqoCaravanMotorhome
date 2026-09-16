@@ -99,16 +99,29 @@ enum WarrantyEvidencePackBuilder {
 
             drawBody("Linked documents", bold: true)
             let linkedDocs = WarrantySupport.warrantyDocuments(from: input.documents, events: input.events)
-            let eventEvidence = WarrantySupport.eventEvidenceItems(from: input.events)
-            if linkedDocs.isEmpty && eventEvidence.isEmpty {
+            let evidence = WarrantySupport.evidencePackAttachments(
+                events: input.events,
+                documents: input.documents,
+                maintenanceRecords: input.maintenanceRecords,
+                faults: input.faults
+            )
+            var listedFiles: [WarrantySupport.EvidencePackAttachment] = []
+            var photographs: [(sourceTitle: String, displayName: String, image: UIImage)] = []
+            for item in evidence {
+                if item.isPhotograph, let image = MaintenanceAttachmentStore.loadImage(for: item.attachment) {
+                    photographs.append((item.sourceTitle, item.displayName, image))
+                } else {
+                    listedFiles.append(item)
+                }
+            }
+            if linkedDocs.isEmpty && listedFiles.isEmpty && photographs.isEmpty {
                 drawBody("No warranty documents or event evidence recorded.")
             } else {
                 for doc in linkedDocs {
                     drawBody("• \(doc.title.isEmpty ? doc.category.displayName : doc.title) · \(Formatters.date(doc.dateAdded))")
                 }
-                for item in eventEvidence {
-                    let name = item.attachment.displayName.isEmpty ? "Attachment" : item.attachment.displayName
-                    drawBody("• \(name) · attached to \(item.event.displayTitle)")
+                for item in listedFiles {
+                    drawBody("• \(item.displayName) · attached to \(item.sourceTitle)")
                 }
             }
 
@@ -130,9 +143,57 @@ enum WarrantyEvidencePackBuilder {
                 }
             }
 
+            if !photographs.isEmpty {
+                drawBody("Photographs", bold: true)
+                var lastSource: String?
+                for item in photographs {
+                    let maxHeight: CGFloat = 220
+                    let scale = min(
+                        contentWidth / max(item.image.size.width, 1),
+                        maxHeight / max(item.image.size.height, 1)
+                    )
+                    let drawSize = CGSize(
+                        width: item.image.size.width * scale,
+                        height: item.image.size.height * scale
+                    )
+                    let sourceHeight: CGFloat = item.sourceTitle == lastSource ? 0 : 24
+                    beginPageIfNeeded(requiredHeight: sourceHeight + drawSize.height + 36)
+                    if item.sourceTitle != lastSource {
+                        drawBody(item.sourceTitle, bold: true)
+                        lastSource = item.sourceTitle
+                    }
+                    drawBody(item.displayName)
+                    item.image.draw(in: CGRect(x: margin, y: y, width: drawSize.width, height: drawSize.height))
+                    y += drawSize.height + 12
+                }
+            }
+
             beginPageIfNeeded(requiredHeight: 120)
             drawBody("Disclaimer", bold: true)
             drawBody(WarrantySupport.warrantyDisclaimer)
+        }
+    }
+
+    static func photographItems(from input: Input) -> [(sourceTitle: String, displayName: String, image: UIImage)] {
+        photographItems(
+            from: WarrantySupport.evidencePackAttachments(
+                events: input.events,
+                documents: input.documents,
+                maintenanceRecords: input.maintenanceRecords,
+                faults: input.faults
+            )
+        )
+    }
+
+    static func photographItems(
+        from attachments: [WarrantySupport.EvidencePackAttachment]
+    ) -> [(sourceTitle: String, displayName: String, image: UIImage)] {
+        attachments.compactMap { item in
+            guard item.isPhotograph,
+                  let image = MaintenanceAttachmentStore.loadImage(for: item.attachment) else {
+                return nil
+            }
+            return (item.sourceTitle, item.displayName, image)
         }
     }
 }

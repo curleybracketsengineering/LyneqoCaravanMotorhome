@@ -440,18 +440,6 @@ enum WarrantySupport {
         return titles.count == 1 ? first : "\(titles.count) service events"
     }
 
-    /// Service years shown when linking a document. Cost items stay nested on their year.
-    static func serviceEventsForDocumentLinking(from events: [WarrantyEvent]) -> [WarrantyEvent] {
-        events
-            .filter { !$0.isCostItem }
-            .sorted { lhs, rhs in
-                if lhs.scheduledDate != rhs.scheduledDate {
-                    return lhs.scheduledDate < rhs.scheduledDate
-                }
-                return lhs.sortOrder < rhs.sortOrder
-            }
-    }
-
     static func documentCategory(for serviceType: WarrantyServiceType) -> DocumentCategory {
         switch serviceType {
         case .normalService, .serviceWithBodyCheck, .vehicleInspection:
@@ -514,6 +502,91 @@ enum WarrantySupport {
         return records.filter {
             warrantyMaintenanceCategories.contains($0.category) || linkedIDs.contains($0.id)
         }
+    }
+
+    struct EvidencePackAttachment {
+        let sourceTitle: String
+        let attachment: MaintenanceAttachment
+
+        var displayName: String {
+            attachment.displayName.isEmpty ? "Attachment" : attachment.displayName
+        }
+
+        var isPhotograph: Bool {
+            switch attachment.fileType {
+            case .photo, .scannedDocument: return true
+            case .pdf, .file: return false
+            }
+        }
+    }
+
+    /// Files shown in the evidence pack: leftover event-owned files, plus files on linked documents,
+    /// related service records, and warranty items. Deduplicated by attachment id.
+    static func evidencePackAttachments(
+        events: [WarrantyEvent],
+        documents: [DocumentRecord],
+        maintenanceRecords: [MaintenanceRecord] = [],
+        faults: [FaultRecord] = []
+    ) -> [EvidencePackAttachment] {
+        var seen = Set<UUID>()
+        var items: [EvidencePackAttachment] = []
+
+        func add(_ attachment: MaintenanceAttachment, sourceTitle: String) {
+            guard seen.insert(attachment.id).inserted else { return }
+            items.append(EvidencePackAttachment(sourceTitle: sourceTitle, attachment: attachment))
+        }
+
+        let documentsByID = Dictionary(uniqueKeysWithValues: documents.map { ($0.id, $0) })
+        let maintenanceByID = Dictionary(uniqueKeysWithValues: maintenanceRecords.map { ($0.id, $0) })
+        let faultsByID = Dictionary(uniqueKeysWithValues: faults.map { ($0.id, $0) })
+
+        for event in events {
+            let title = event.displayTitle
+            for attachment in event.attachmentsList {
+                add(attachment, sourceTitle: title)
+            }
+            for documentID in event.linkedDocumentIDs {
+                guard let document = documentsByID[documentID] else { continue }
+                for attachment in document.attachmentsList {
+                    add(attachment, sourceTitle: title)
+                }
+            }
+            if let maintenanceID = event.linkedMaintenanceID,
+               let record = maintenanceByID[maintenanceID] {
+                for attachment in record.attachmentsList {
+                    add(attachment, sourceTitle: title)
+                }
+            }
+            if let faultID = event.linkedFaultID,
+               let fault = faultsByID[faultID] {
+                for attachment in fault.attachmentsList {
+                    add(attachment, sourceTitle: title)
+                }
+            }
+        }
+
+        for document in warrantyDocuments(from: documents, events: events) {
+            let title = document.title.isEmpty ? document.category.displayName : document.title
+            for attachment in document.attachmentsList {
+                add(attachment, sourceTitle: title)
+            }
+        }
+
+        for record in warrantyRepairs(from: maintenanceRecords, events: events) {
+            let title = record.title.isEmpty ? record.category.displayName : record.title
+            for attachment in record.attachmentsList {
+                add(attachment, sourceTitle: title)
+            }
+        }
+
+        for fault in warrantyFaults(from: faults, events: events) {
+            let title = fault.title.isEmpty ? "Warranty item" : fault.title
+            for attachment in fault.attachmentsList {
+                add(attachment, sourceTitle: title)
+            }
+        }
+
+        return items
     }
 
     static func eventEvidenceItems(from events: [WarrantyEvent]) -> [(event: WarrantyEvent, attachment: MaintenanceAttachment)] {

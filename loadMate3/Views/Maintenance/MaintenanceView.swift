@@ -139,7 +139,7 @@ struct MaintenanceView: View {
         }
         .sheet(isPresented: $showDocumentCreate) {
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile, serviceEvents: scopedServiceEvents)
+                DocumentRecordEditorView(profile: profile)
             }
         }
         .sheet(isPresented: $showFaultCreate) {
@@ -158,7 +158,7 @@ struct MaintenanceView: View {
         }
         .sheet(item: $selectedDocumentRecord) { record in
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile, record: record, serviceEvents: scopedServiceEvents)
+                DocumentRecordEditorView(profile: profile, record: record)
             }
         }
         .sheet(item: $selectedFaultRecord) { record in
@@ -1044,10 +1044,10 @@ private struct MaintenanceRecordEditorView: View {
 struct DocumentRecordEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var sidecarPhotos = CloudKitSidecarPhotoSync.shared
 
     let profile: VehicleProfile
     let record: DocumentRecord?
-    let serviceEvents: [WarrantyEvent]
 
     @State private var title: String
     @State private var category: DocumentCategory
@@ -1058,12 +1058,10 @@ struct DocumentRecordEditorView: View {
     @State private var reminderDate: Date
     @State private var notes: String
     @State private var pendingAttachments: [MaintenanceAttachmentDraft] = []
-    @State private var linkedEventIDs: Set<UUID>
 
-    init(profile: VehicleProfile, record: DocumentRecord? = nil, serviceEvents: [WarrantyEvent] = []) {
+    init(profile: VehicleProfile, record: DocumentRecord? = nil) {
         self.profile = profile
         self.record = record
-        self.serviceEvents = serviceEvents
         _title = State(initialValue: record?.title ?? "")
         _category = State(initialValue: record?.category ?? .other)
         _dateAdded = State(initialValue: record?.dateAdded ?? Date())
@@ -1072,18 +1070,10 @@ struct DocumentRecordEditorView: View {
         _hasReminderDate = State(initialValue: record?.reminderDate != nil)
         _reminderDate = State(initialValue: record?.reminderDate ?? Date())
         _notes = State(initialValue: record?.notes ?? "")
-        _linkedEventIDs = State(
-            initialValue: record.map { document in
-                Set(WarrantySupport.events(linkedTo: document.id, from: serviceEvents).map(\.id))
-            } ?? []
-        )
-    }
-
-    private var linkableServiceEvents: [WarrantyEvent] {
-        WarrantySupport.serviceEventsForDocumentLinking(from: serviceEvents)
     }
 
     var body: some View {
+        let _ = sidecarPhotos.revision
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppScreenMetrics.sectionSpacing) {
@@ -1117,28 +1107,6 @@ struct DocumentRecordEditorView: View {
                         MaintenanceNotesEditor(text: $notes)
                     }
 
-                    if !linkableServiceEvents.isEmpty {
-                        AppSettingsSection(
-                            "Service event",
-                            caption: "Link this document to a year on the service timeline. It stays in Documents and also appears on that event."
-                        ) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(linkableServiceEvents) { event in
-                                    Toggle(isOn: Binding(
-                                        get: { linkedEventIDs.contains(event.id) },
-                                        set: { isOn in
-                                            if isOn { linkedEventIDs.insert(event.id) }
-                                            else { linkedEventIDs.remove(event.id) }
-                                        }
-                                    )) {
-                                        Text(event.displayTitle)
-                                            .font(.subheadline)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
                     MaintenanceAttachmentEditorSection(
                         pendingAttachments: $pendingAttachments,
                         existingAttachments: record?.attachmentsList ?? [],
@@ -1163,6 +1131,11 @@ struct DocumentRecordEditorView: View {
                     Button("Close") { dismiss() }
                 }
             }
+            .onAppear {
+                for attachment in record?.attachmentsList ?? [] {
+                    CloudKitSidecarPhotoSync.shared.downloadAttachmentIfNeeded(attachment)
+                }
+            }
         }
     }
 
@@ -1185,12 +1158,6 @@ struct DocumentRecordEditorView: View {
                 in: modelContext
             )
         }
-        WarrantyStore.setLinkedEvents(
-            for: target,
-            eventIDs: linkedEventIDs,
-            among: serviceEvents,
-            in: modelContext
-        )
         dismiss()
     }
 }

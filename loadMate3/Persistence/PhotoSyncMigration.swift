@@ -23,6 +23,27 @@ enum PhotoSyncSupport {
         return nonEmpty(data)
     }
 
+    /// Moves a sidecar file from one vehicle folder to another after a profile merge.
+    static func moveFile(
+        fromVehicle oldID: UUID,
+        toVehicle newID: UUID,
+        fileName: String,
+        fileURL: (UUID, String) throws -> URL
+    ) {
+        let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard oldID != newID, !trimmed.isEmpty else { return }
+        guard let source = try? fileURL(oldID, trimmed),
+              FileManager.default.fileExists(atPath: source.path),
+              let destination = try? fileURL(newID, trimmed) else {
+            return
+        }
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try? FileManager.default.removeItem(at: source)
+            return
+        }
+        try? FileManager.default.moveItem(at: source, to: destination)
+    }
+
     /// Writes `data` to disk when the named file is missing. Creates a UUID file name
     /// when `fileName` is empty. Returns the file name on success.
     static func ensureOnDisk(

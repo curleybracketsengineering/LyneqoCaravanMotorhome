@@ -4,6 +4,7 @@ import SwiftUI
 struct DocumentsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.padTopTabBarActive) private var padTopTabBarActive
+    @ObservedObject private var sidecarPhotos = CloudKitSidecarPhotoSync.shared
     @Query private var profiles: [VehicleProfile]
     @Query private var appStates: [AppState]
     @Query private var documentRecords: [DocumentRecord]
@@ -51,7 +52,17 @@ struct DocumentsView: View {
         }
     }
 
+    private var documentSyncToken: String {
+        scopedDocuments
+            .map { record in
+                let files = record.attachmentsList.map(\.id.uuidString).sorted().joined(separator: ",")
+                return "\(record.id.uuidString):\(record.vehicleID.uuidString):\(files)"
+            }
+            .joined(separator: "|")
+    }
+
     var body: some View {
+        let _ = sidecarPhotos.revision
         Group {
             if activeProfile != nil {
                 documentsContent
@@ -79,16 +90,28 @@ struct DocumentsView: View {
         }
         .sheet(isPresented: $showCreate) {
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile, serviceEvents: scopedServiceEvents)
+                DocumentRecordEditorView(profile: profile)
             }
         }
         .sheet(item: $selectedRecord) { record in
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile, record: record, serviceEvents: scopedServiceEvents)
+                DocumentRecordEditorView(profile: profile, record: record)
             }
         }
         .onAppear {
-            WarrantyStore.promoteEventAttachmentsToDocuments(events: scopedServiceEvents, in: modelContext)
+            refreshSyncedDocuments()
+        }
+        .onChange(of: documentSyncToken) { _, _ in
+            refreshSyncedDocuments()
+        }
+    }
+
+    private func refreshSyncedDocuments() {
+        WarrantyStore.promoteEventAttachmentsToDocuments(events: scopedServiceEvents, in: modelContext)
+        for record in scopedDocuments {
+            for attachment in record.attachmentsList {
+                CloudKitSidecarPhotoSync.shared.downloadAttachmentIfNeeded(attachment)
+            }
         }
     }
 

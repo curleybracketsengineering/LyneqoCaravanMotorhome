@@ -1093,4 +1093,91 @@ final class WarrantySupportTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<DocumentRecord>()).count, 1)
         XCTAssertEqual(try context.fetch(FetchDescriptor<DocumentRecord>()).first?.id, document.id)
     }
+
+    func testEvidencePackAttachmentsIncludePhotosOnLinkedDocuments() throws {
+        let vehicleID = UUID()
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        event.yearNumber = 1
+        event.serviceType = .normalService
+        context.insert(event)
+
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 60)).image { ctx in
+            UIColor.orange.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 80, height: 60))
+        }
+        let draft = try MaintenanceAttachmentStore.draft(
+            image: image,
+            fileType: .photo,
+            displayName: "Service photo"
+        )
+        WarrantyStore.attachDrafts([draft], to: event, in: context)
+
+        let documents = try context.fetch(FetchDescriptor<DocumentRecord>())
+        XCTAssertTrue(event.attachmentsList.isEmpty)
+
+        let items = WarrantySupport.evidencePackAttachments(
+            events: [event],
+            documents: documents
+        )
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.displayName, "Service photo")
+        XCTAssertEqual(items.first?.sourceTitle, event.displayTitle)
+        XCTAssertTrue(items.first?.isPhotograph == true)
+        XCTAssertTrue(WarrantySupport.eventEvidenceItems(from: [event]).isEmpty)
+    }
+
+    func testEvidencePackAttachmentsDedupesAndIncludesRelatedRecords() throws {
+        let vehicleID = UUID()
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        event.yearNumber = 2
+        context.insert(event)
+
+        let document = DocumentRecord(vehicleID: vehicleID)
+        document.title = "Year 2 paperwork"
+        document.category = .serviceHistory
+        context.insert(document)
+        event.linkedDocumentIDs = [document.id]
+
+        let linkedPhoto = MaintenanceAttachment(
+            vehicleID: vehicleID,
+            localFileName: "linked.jpg",
+            fileType: .photo,
+            displayName: "Linked photo",
+            utiIdentifier: "public.jpeg"
+        )
+        linkedPhoto.documentRecord = document
+        context.insert(linkedPhoto)
+
+        let leftover = MaintenanceAttachment(
+            vehicleID: vehicleID,
+            localFileName: "legacy.jpg",
+            fileType: .photo,
+            displayName: "Legacy event photo",
+            utiIdentifier: "public.jpeg"
+        )
+        leftover.warrantyEvent = event
+        context.insert(leftover)
+
+        let repair = MaintenanceRecord(vehicleID: vehicleID)
+        repair.title = "Warranty repair"
+        repair.category = .warrantyRepair
+        context.insert(repair)
+        let repairPhoto = MaintenanceAttachment(
+            vehicleID: vehicleID,
+            localFileName: "repair.jpg",
+            fileType: .scannedDocument,
+            displayName: "Repair scan",
+            utiIdentifier: "public.jpeg"
+        )
+        repairPhoto.maintenanceRecord = repair
+        context.insert(repairPhoto)
+
+        let items = WarrantySupport.evidencePackAttachments(
+            events: [event],
+            documents: [document],
+            maintenanceRecords: [repair]
+        )
+        XCTAssertEqual(Set(items.map(\.displayName)), ["Linked photo", "Legacy event photo", "Repair scan"])
+        XCTAssertEqual(items.filter { $0.attachment.id == linkedPhoto.id }.count, 1)
+    }
 }

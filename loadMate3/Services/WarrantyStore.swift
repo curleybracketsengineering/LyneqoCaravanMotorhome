@@ -292,10 +292,8 @@ enum WarrantyStore {
         if !linkedIDs.isEmpty {
             let documents = (try? context.fetch(FetchDescriptor<DocumentRecord>())) ?? []
             if let existing = documents.first(where: {
-                linkedIDs.contains($0.id)
-                    && $0.vehicleID == event.vehicleID
-                    && $0.category == category
-            }) {
+                linkedIDs.contains($0.id) && $0.vehicleID == event.vehicleID
+            }) ?? documents.first(where: { linkedIDs.contains($0.id) }) {
                 return existing
             }
         }

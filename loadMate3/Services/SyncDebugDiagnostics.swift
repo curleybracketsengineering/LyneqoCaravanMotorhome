@@ -8,10 +8,12 @@ struct SyncDebugEntityCounts: Equatable {
     var libraryItems: Int = 0
     var checklistSections: Int = 0
     var checklistItems: Int = 0
+    var documents: Int = 0
+    var attachments: Int = 0
     var appStates: Int = 0
 
     var logLine: String {
-        "profiles=\(profiles), trips=\(trips), loadedItems=\(loadedItems), libraryItems=\(libraryItems), checklistSections=\(checklistSections), checklistItems=\(checklistItems), appStates=\(appStates)"
+        "profiles=\(profiles), trips=\(trips), loadedItems=\(loadedItems), libraryItems=\(libraryItems), checklistSections=\(checklistSections), checklistItems=\(checklistItems), documents=\(documents), attachments=\(attachments), appStates=\(appStates)"
     }
 
     func deltaDescription(from earlier: SyncDebugEntityCounts) -> String {
@@ -22,6 +24,8 @@ struct SyncDebugEntityCounts: Equatable {
             ("LibraryItem", earlier.libraryItems, libraryItems),
             ("ChecklistSection", earlier.checklistSections, checklistSections),
             ("ChecklistItem", earlier.checklistItems, checklistItems),
+            ("DocumentRecord", earlier.documents, documents),
+            ("MaintenanceAttachment", earlier.attachments, attachments),
             ("AppState", earlier.appStates, appStates),
         ]
         let changed = pairs.filter { $0.1 != $0.2 }
@@ -37,6 +41,8 @@ struct SyncDebugEntityCounts: Equatable {
             libraryItems: fetchCount(FetchDescriptor<LibraryItem>(), from: context),
             checklistSections: fetchCount(FetchDescriptor<ChecklistSection>(), from: context),
             checklistItems: fetchCount(FetchDescriptor<ChecklistItem>(), from: context),
+            documents: fetchCount(FetchDescriptor<DocumentRecord>(), from: context),
+            attachments: fetchCount(FetchDescriptor<MaintenanceAttachment>(), from: context),
             appStates: fetchCount(FetchDescriptor<AppState>(), from: context)
         )
     }

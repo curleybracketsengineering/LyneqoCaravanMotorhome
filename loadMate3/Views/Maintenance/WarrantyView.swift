@@ -1820,7 +1820,7 @@ private struct WarrantyEvidenceShareSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: AppScreenMetrics.sectionSpacing) {
-                Text("Your warranty evidence pack is ready to share or save. It includes the service timeline.")
+                Text("Your warranty evidence pack is ready to share or save. It includes the service timeline and any photographs attached to service events.")
                     .font(.subheadline)
                     .foregroundStyle(AppColors.textSupporting)
                     .multilineTextAlignment(.center)
