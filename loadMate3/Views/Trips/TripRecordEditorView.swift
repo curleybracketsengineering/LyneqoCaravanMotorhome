@@ -223,7 +223,7 @@ struct TripRecordEditorView: View {
 
             HStack(alignment: .top, spacing: AppScreenMetrics.controlSpacing) {
                 compactRouteField("Mileage", text: $draft.legs[index].mileageText, keyboard: .decimalPad)
-                compactRouteField("Journey time", text: $draft.legs[index].travelTimeText, prompt: "2:30 or 2.5")
+                compactRouteField("Journey time", text: $draft.legs[index].travelTimeText, prompt: "3")
             }
 
             TextField("Journey notes", text: $draft.legs[index].notes, axis: .vertical)

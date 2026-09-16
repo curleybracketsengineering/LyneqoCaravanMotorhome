@@ -163,6 +163,11 @@ enum WarrantyStore {
     }
 
     static func delete(event: WarrantyEvent, in context: ModelContext) {
+        var doomed = [event]
+        if let plan = event.plan {
+            doomed.append(contentsOf: plan.costItems(for: event))
+        }
+        promoteEventAttachmentsToDocuments(events: doomed, in: context)
         if let plan = event.plan {
             for item in plan.costItems(for: event) {
                 remove(event: item, in: context)
@@ -180,11 +185,135 @@ enum WarrantyStore {
     }
 
     static func delete(plan: WarrantyPlan, in context: ModelContext) {
+        promoteEventAttachmentsToDocuments(events: plan.eventsList, in: context)
         for event in plan.eventsList {
             remove(event: event, in: context)
         }
         context.delete(plan)
         try? context.save()
+    }
+
+    static func link(document: DocumentRecord, to event: WarrantyEvent, in context: ModelContext) {
+        var ids = event.linkedDocumentIDs
+        if !ids.contains(document.id) {
+            ids.append(document.id)
+            event.linkedDocumentIDs = ids
+            event.updatedAt = Date()
+        }
+        document.isWarrantyRelated = true
+        document.updatedAt = Date()
+        try? context.save()
+    }
+
+    static func unlink(documentID: UUID, from event: WarrantyEvent, in context: ModelContext) {
+        let remaining = event.linkedDocumentIDs.filter { $0 != documentID }
+        guard remaining.count != event.linkedDocumentIDs.count else { return }
+        event.linkedDocumentIDs = remaining
+        event.updatedAt = Date()
+        try? context.save()
+    }
+
+    static func setLinkedEvents(
+        for document: DocumentRecord,
+        eventIDs: Set<UUID>,
+        among events: [WarrantyEvent],
+        in context: ModelContext
+    ) {
+        for event in events {
+            let shouldLink = eventIDs.contains(event.id)
+            let isLinked = event.linkedDocumentIDs.contains(document.id)
+            if shouldLink, !isLinked {
+                link(document: document, to: event, in: context)
+            } else if !shouldLink, isLinked {
+                unlink(documentID: document.id, from: event, in: context)
+            }
+        }
+
+        let stillLinked = events.contains { $0.linkedDocumentIDs.contains(document.id) }
+        if stillLinked {
+            document.isWarrantyRelated = true
+        } else if !WarrantySupport.warrantyDocumentCategories.contains(document.category) {
+            document.isWarrantyRelated = false
+        }
+        document.updatedAt = Date()
+        try? context.save()
+    }
+
+    /// Files added on a service event are stored as a Documents record so they also appear in Documents.
+    static func attachDrafts(
+        _ drafts: [MaintenanceAttachmentDraft],
+        to event: WarrantyEvent,
+        in context: ModelContext
+    ) {
+        guard !drafts.isEmpty else { return }
+        let document = linkedOrCreateDocument(
+            for: event,
+            preferredTitle: WarrantySupport.documentTitle(for: event),
+            in: context
+        )
+        MaintenanceAttachmentStore.save(drafts: drafts, to: .document(document), in: context)
+    }
+
+    /// Moves leftover event-only files onto linked Care documents.
+    @discardableResult
+    static func promoteEventAttachmentsToDocuments(
+        events: [WarrantyEvent],
+        in context: ModelContext
+    ) -> Int {
+        var moved = 0
+        for event in events {
+            let attachments = event.attachmentsList
+            guard !attachments.isEmpty else { continue }
+            let document = linkedOrCreateDocument(
+                for: event,
+                preferredTitle: WarrantySupport.documentTitle(for: event),
+                in: context
+            )
+            for attachment in attachments {
+                attachment.warrantyEvent = nil
+                attachment.documentRecord = document
+                moved += 1
+            }
+            event.updatedAt = Date()
+        }
+        if moved > 0 {
+            try? context.save()
+        }
+        return moved
+    }
+
+    private static func linkedOrCreateDocument(
+        for event: WarrantyEvent,
+        preferredTitle: String,
+        in context: ModelContext
+    ) -> DocumentRecord {
+        let category = WarrantySupport.documentCategory(for: event.serviceType)
+        let linkedIDs = Set(event.linkedDocumentIDs)
+        if !linkedIDs.isEmpty {
+            let documents = (try? context.fetch(FetchDescriptor<DocumentRecord>())) ?? []
+            if let existing = documents.first(where: {
+                linkedIDs.contains($0.id)
+                    && $0.vehicleID == event.vehicleID
+                    && $0.category == category
+            }) {
+                return existing
+            }
+        }
+
+        let record = DocumentStore.createRecord(for: event.vehicleID, in: context)
+        DocumentStore.save(
+            record: record,
+            title: preferredTitle,
+            category: category,
+            dateAdded: event.completedDate ?? event.scheduledDate,
+            expiryDate: nil,
+            reminderDate: nil,
+            notes: "",
+            isWarrantyRelated: true,
+            in: context
+        )
+        link(document: record, to: event, in: context)
+        return record
     }
 
     /// Keeps one service plan per vehicle after iCloud duplicates. Prefers completed work and photos.

@@ -394,7 +394,7 @@ enum WarrantySupport {
         .warrantyRepair, .dampInspection, .annualHabitationService
     ]
 
-    /// Paperwork that can be attached to a service event. CRiS VIN Chip and CRiS
+    /// Paperwork included in warranty evidence. CRiS VIN Chip and CRiS
     /// registration stay in Settings / Documents unless they are already linked.
     static func linkableDocuments(
         from documents: [DocumentRecord],
@@ -406,6 +406,68 @@ enum WarrantySupport {
             if vehicleIdentityDocumentCategories.contains(document.category) { return false }
             return document.isWarrantyRelated || warrantyDocumentCategories.contains(document.category)
         }
+    }
+
+    /// Every vehicle document that can be attached to a service event from the event editor.
+    /// Identity records stay in Documents unless they are already linked.
+    static func documentsAvailableToLink(
+        from documents: [DocumentRecord],
+        alreadyLinkedIDs: [UUID] = []
+    ) -> [DocumentRecord] {
+        let linkedIDs = Set(alreadyLinkedIDs)
+        return documents.filter { document in
+            if linkedIDs.contains(document.id) { return true }
+            return !vehicleIdentityDocumentCategories.contains(document.category)
+        }
+    }
+
+    static func events(
+        linkedTo documentID: UUID,
+        from events: [WarrantyEvent]
+    ) -> [WarrantyEvent] {
+        events.filter { $0.linkedDocumentIDs.contains(documentID) }
+    }
+
+    static func linkedEventTitles(
+        for documentID: UUID,
+        from serviceEvents: [WarrantyEvent]
+    ) -> [String] {
+        events(linkedTo: documentID, from: serviceEvents).map(\.displayTitle)
+    }
+
+    static func linkedServiceYearLabel(from titles: [String]) -> String? {
+        guard let first = titles.first else { return nil }
+        return titles.count == 1 ? first : "\(titles.count) service events"
+    }
+
+    /// Service years shown when linking a document. Cost items stay nested on their year.
+    static func serviceEventsForDocumentLinking(from events: [WarrantyEvent]) -> [WarrantyEvent] {
+        events
+            .filter { !$0.isCostItem }
+            .sorted { lhs, rhs in
+                if lhs.scheduledDate != rhs.scheduledDate {
+                    return lhs.scheduledDate < rhs.scheduledDate
+                }
+                return lhs.sortOrder < rhs.sortOrder
+            }
+    }
+
+    static func documentCategory(for serviceType: WarrantyServiceType) -> DocumentCategory {
+        switch serviceType {
+        case .normalService, .serviceWithBodyCheck, .vehicleInspection:
+            return .serviceHistory
+        case .mot:
+            return .mot
+        case .insuranceRenewal:
+            return .insurance
+        case .custom:
+            return .other
+        }
+    }
+
+    static func documentTitle(for event: WarrantyEvent) -> String {
+        let title = event.displayTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return title.isEmpty ? "Service evidence" : title
     }
 
     static func warrantyDocuments(

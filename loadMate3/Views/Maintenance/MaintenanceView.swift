@@ -49,6 +49,13 @@ struct MaintenanceView: View {
         return MaintenanceSupport.documentRecords(for: profile.id, from: documentRecords)
     }
 
+    private var scopedServiceEvents: [WarrantyEvent] {
+        guard let profile = activeProfile else { return [] }
+        return warrantyPlans
+            .filter { $0.vehicleID == profile.id }
+            .flatMap(\.eventsList)
+    }
+
     private var scopedFaults: [FaultRecord] {
         guard let profile = activeProfile else { return [] }
         return MaintenanceSupport.faultRecords(for: profile.id, from: faultRecords)
@@ -115,6 +122,9 @@ struct MaintenanceView: View {
                     .accessibilityLabel("Add maintenance item")
                 }
             }
+            .onAppear {
+                WarrantyStore.promoteEventAttachmentsToDocuments(events: scopedServiceEvents, in: modelContext)
+            }
         }
         .confirmationDialog("Add", isPresented: $showCreateDialog, titleVisibility: .visible) {
             Button("Maintenance record") { showMaintenanceCreate = true }
@@ -129,7 +139,7 @@ struct MaintenanceView: View {
         }
         .sheet(isPresented: $showDocumentCreate) {
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile)
+                DocumentRecordEditorView(profile: profile, serviceEvents: scopedServiceEvents)
             }
         }
         .sheet(isPresented: $showFaultCreate) {
@@ -148,7 +158,7 @@ struct MaintenanceView: View {
         }
         .sheet(item: $selectedDocumentRecord) { record in
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile, record: record)
+                DocumentRecordEditorView(profile: profile, record: record, serviceEvents: scopedServiceEvents)
             }
         }
         .sheet(item: $selectedFaultRecord) { record in
@@ -166,7 +176,7 @@ struct MaintenanceView: View {
             }
         }
         .sheet(isPresented: $showDocumentsList) {
-            DocumentsListView(records: scopedDocuments) { record in
+            DocumentsListView(records: scopedDocuments, serviceEvents: scopedServiceEvents) { record in
                 selectedDocumentRecord = record
             }
         }
@@ -177,7 +187,7 @@ struct MaintenanceView: View {
         }
         .sheet(item: $selectedWarrantyEvent) { event in
             if let plan = WarrantySupport.plan(for: event.vehicleID, from: warrantyPlans) {
-                WarrantyEventEditorSheet(plan: plan, event: event, documents: scopedDocuments)
+                WarrantyEventEditorSheet(plan: plan, event: event)
             }
         }
         .sheet(isPresented: $showWarrantyFromReminder) {
@@ -734,6 +744,7 @@ private struct MaintenanceRecordsListView: View {
 private struct DocumentsListView: View {
     @Environment(\.dismiss) private var dismiss
     let records: [DocumentRecord]
+    var serviceEvents: [WarrantyEvent] = []
     let onSelect: (DocumentRecord) -> Void
 
     var body: some View {
@@ -751,7 +762,7 @@ private struct DocumentsListView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(record.title.isEmpty ? record.category.displayName : record.title)
                                     .foregroundStyle(Color.primary)
-                                Text("\(record.category.displayName) • \(Formatters.date(record.dateAdded))")
+                                Text(subtitle(for: record))
                                     .font(.caption)
                                     .foregroundStyle(AppColors.textSupporting)
                             }
@@ -768,6 +779,16 @@ private struct DocumentsListView: View {
                 }
             }
         }
+    }
+
+    private func subtitle(for record: DocumentRecord) -> String {
+        var parts = [record.category.displayName, Formatters.date(record.dateAdded)]
+        if let linked = WarrantySupport.linkedServiceYearLabel(
+            from: WarrantySupport.linkedEventTitles(for: record.id, from: serviceEvents)
+        ) {
+            parts.append(linked)
+        }
+        return parts.joined(separator: " • ")
     }
 }
 
@@ -1026,6 +1047,7 @@ struct DocumentRecordEditorView: View {
 
     let profile: VehicleProfile
     let record: DocumentRecord?
+    let serviceEvents: [WarrantyEvent]
 
     @State private var title: String
     @State private var category: DocumentCategory
@@ -1036,10 +1058,12 @@ struct DocumentRecordEditorView: View {
     @State private var reminderDate: Date
     @State private var notes: String
     @State private var pendingAttachments: [MaintenanceAttachmentDraft] = []
+    @State private var linkedEventIDs: Set<UUID>
 
-    init(profile: VehicleProfile, record: DocumentRecord? = nil) {
+    init(profile: VehicleProfile, record: DocumentRecord? = nil, serviceEvents: [WarrantyEvent] = []) {
         self.profile = profile
         self.record = record
+        self.serviceEvents = serviceEvents
         _title = State(initialValue: record?.title ?? "")
         _category = State(initialValue: record?.category ?? .other)
         _dateAdded = State(initialValue: record?.dateAdded ?? Date())
@@ -1048,6 +1072,15 @@ struct DocumentRecordEditorView: View {
         _hasReminderDate = State(initialValue: record?.reminderDate != nil)
         _reminderDate = State(initialValue: record?.reminderDate ?? Date())
         _notes = State(initialValue: record?.notes ?? "")
+        _linkedEventIDs = State(
+            initialValue: record.map { document in
+                Set(WarrantySupport.events(linkedTo: document.id, from: serviceEvents).map(\.id))
+            } ?? []
+        )
+    }
+
+    private var linkableServiceEvents: [WarrantyEvent] {
+        WarrantySupport.serviceEventsForDocumentLinking(from: serviceEvents)
     }
 
     var body: some View {
@@ -1082,6 +1115,28 @@ struct DocumentRecordEditorView: View {
 
                     AppSettingsSection("Notes") {
                         MaintenanceNotesEditor(text: $notes)
+                    }
+
+                    if !linkableServiceEvents.isEmpty {
+                        AppSettingsSection(
+                            "Service event",
+                            caption: "Link this document to a year on the service timeline. It stays in Documents and also appears on that event."
+                        ) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(linkableServiceEvents) { event in
+                                    Toggle(isOn: Binding(
+                                        get: { linkedEventIDs.contains(event.id) },
+                                        set: { isOn in
+                                            if isOn { linkedEventIDs.insert(event.id) }
+                                            else { linkedEventIDs.remove(event.id) }
+                                        }
+                                    )) {
+                                        Text(event.displayTitle)
+                                            .font(.subheadline)
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     MaintenanceAttachmentEditorSection(
@@ -1130,6 +1185,12 @@ struct DocumentRecordEditorView: View {
                 in: modelContext
             )
         }
+        WarrantyStore.setLinkedEvents(
+            for: target,
+            eventIDs: linkedEventIDs,
+            among: serviceEvents,
+            in: modelContext
+        )
         dismiss()
     }
 }

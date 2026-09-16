@@ -2,9 +2,12 @@ import SwiftData
 import SwiftUI
 
 struct DocumentsView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.padTopTabBarActive) private var padTopTabBarActive
     @Query private var profiles: [VehicleProfile]
     @Query private var appStates: [AppState]
     @Query private var documentRecords: [DocumentRecord]
+    @Query private var warrantyPlans: [WarrantyPlan]
 
     @State private var searchText = ""
     @State private var showCreate = false
@@ -19,6 +22,13 @@ struct DocumentsView: View {
         return MaintenanceSupport.documentRecords(for: profile.id, from: documentRecords)
     }
 
+    private var scopedServiceEvents: [WarrantyEvent] {
+        guard let profile = activeProfile else { return [] }
+        return warrantyPlans
+            .filter { $0.vehicleID == profile.id }
+            .flatMap(\.eventsList)
+    }
+
     private var filteredDocuments: [DocumentRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let sorted = scopedDocuments.sorted {
@@ -27,10 +37,13 @@ struct DocumentsView: View {
         }
         guard !query.isEmpty else { return sorted }
         return sorted.filter { record in
-            [
+            let linkedTitles = WarrantySupport.linkedEventTitles(for: record.id, from: scopedServiceEvents)
+                .joined(separator: " ")
+            return [
                 displayTitle(for: record),
                 record.category.displayName,
-                record.notes
+                record.notes,
+                linkedTitles
             ]
             .joined(separator: " ")
             .lowercased()
@@ -51,8 +64,7 @@ struct DocumentsView: View {
             }
         }
         .appScreenBackground()
-        .navigationTitle("Documents")
-        .navigationBarTitleDisplayMode(.large)
+        .modifier(DocumentsNavigationChrome(isPadTab: padTopTabBarActive))
         .searchable(text: $searchText, prompt: "Search documents")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -67,13 +79,16 @@ struct DocumentsView: View {
         }
         .sheet(isPresented: $showCreate) {
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile)
+                DocumentRecordEditorView(profile: profile, serviceEvents: scopedServiceEvents)
             }
         }
         .sheet(item: $selectedRecord) { record in
             if let profile = activeProfile {
-                DocumentRecordEditorView(profile: profile, record: record)
+                DocumentRecordEditorView(profile: profile, record: record, serviceEvents: scopedServiceEvents)
             }
+        }
+        .onAppear {
+            WarrantyStore.promoteEventAttachmentsToDocuments(events: scopedServiceEvents, in: modelContext)
         }
     }
 
@@ -100,7 +115,13 @@ struct DocumentsView: View {
                             Button {
                                 selectedRecord = record
                             } label: {
-                                DocumentsRowView(record: record)
+                                DocumentsRowView(
+                                    record: record,
+                                    linkedEventTitles: WarrantySupport.linkedEventTitles(
+                                        for: record.id,
+                                        from: scopedServiceEvents
+                                    )
+                                )
                             }
                             .buttonStyle(.plain)
                         }
@@ -125,8 +146,23 @@ struct DocumentsView: View {
     }
 }
 
+private struct DocumentsNavigationChrome: ViewModifier {
+    let isPadTab: Bool
+
+    func body(content: Content) -> some View {
+        if isPadTab {
+            content.appPrincipalTabTitle("Documents")
+        } else {
+            content
+                .navigationTitle("Documents")
+                .navigationBarTitleDisplayMode(.large)
+        }
+    }
+}
+
 private struct DocumentsRowView: View {
     let record: DocumentRecord
+    var linkedEventTitles: [String] = []
 
     private var title: String {
         record.title.isEmpty ? record.category.displayName : record.title
@@ -200,6 +236,9 @@ private struct DocumentsRowView: View {
         if attachmentCount > 0 {
             parts.append("\(attachmentCount) attachment\(attachmentCount == 1 ? "" : "s")")
         }
+        if let linked = WarrantySupport.linkedServiceYearLabel(from: linkedEventTitles) {
+            parts.append(linked)
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -222,6 +261,9 @@ private struct DocumentsRowView: View {
         }
         if let expiryDate = record.expiryDate {
             parts.append("Expires \(Formatters.date(expiryDate))")
+        }
+        if let linked = WarrantySupport.linkedServiceYearLabel(from: linkedEventTitles) {
+            parts.append("Linked to \(linked)")
         }
         return parts.joined(separator: ", ")
     }

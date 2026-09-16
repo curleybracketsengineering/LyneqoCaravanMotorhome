@@ -123,12 +123,12 @@ struct WarrantyView: View {
         }
         .sheet(isPresented: $showAddEvent) {
             if let plan = activePlan {
-                WarrantyEventEditorSheet(plan: plan, event: nil, documents: scopedDocuments)
+                WarrantyEventEditorSheet(plan: plan, event: nil)
             }
         }
         .sheet(item: $selectedEvent) { event in
             if let plan = activePlan {
-                WarrantyEventEditorSheet(plan: plan, event: event, documents: scopedDocuments)
+                WarrantyEventEditorSheet(plan: plan, event: event)
             }
         }
         .sheet(item: $costItemParent) { parentEvent in
@@ -136,7 +136,6 @@ struct WarrantyView: View {
                 WarrantyEventEditorSheet(
                     plan: plan,
                     event: nil,
-                    documents: scopedDocuments,
                     costItemFor: parentEvent
                 )
             }
@@ -174,6 +173,9 @@ struct WarrantyView: View {
             if let profile = activeProfile {
                 WarrantyStore.syncInsuranceRenewalEvents(for: profile, in: modelContext)
             }
+        }
+        .onAppear {
+            WarrantyStore.promoteEventAttachmentsToDocuments(events: planEvents, in: modelContext)
         }
         .confirmationDialog(
             "Regenerate auto events?",
@@ -1290,10 +1292,10 @@ private struct WarrantyPlanEditorSheet: View {
 struct WarrantyEventEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
+    @Query private var documentRecords: [DocumentRecord]
 
     let plan: WarrantyPlan
     let event: WarrantyEvent?
-    let documents: [DocumentRecord]
     let costItemFor: WarrantyEvent?
 
     @State private var scheduledDate: Date
@@ -1311,12 +1313,10 @@ struct WarrantyEventEditorSheet: View {
     init(
         plan: WarrantyPlan,
         event: WarrantyEvent?,
-        documents: [DocumentRecord],
         costItemFor: WarrantyEvent? = nil
     ) {
         self.plan = plan
         self.event = event
-        self.documents = documents
         self.costItemFor = costItemFor
         _scheduledDate = State(initialValue: event?.scheduledDate ?? costItemFor?.scheduledDate ?? Date())
         _daysBefore = State(initialValue: event?.daysBefore ?? (costItemFor == nil ? WarrantySupport.defaultDaysBefore : 0))
@@ -1327,6 +1327,10 @@ struct WarrantyEventEditorSheet: View {
         _completedDate = State(initialValue: event?.completedDate ?? Date())
         _linkedDocumentIDs = State(initialValue: Set(event?.linkedDocumentIDs ?? []))
         _costText = State(initialValue: event?.cost.map { Formatters.currencyInputString($0) } ?? "")
+    }
+
+    private var documents: [DocumentRecord] {
+        MaintenanceSupport.documentRecords(for: plan.vehicleID, from: documentRecords)
     }
 
     private var isCostItem: Bool {
@@ -1375,10 +1379,16 @@ struct WarrantyEventEditorSheet: View {
     }
 
     private var linkableDocuments: [DocumentRecord] {
-        WarrantySupport.linkableDocuments(
+        WarrantySupport.documentsAvailableToLink(
             from: documents,
-            alreadyLinkedIDs: event?.linkedDocumentIDs ?? []
+            alreadyLinkedIDs: Array(linkedDocumentIDs)
         )
+    }
+
+    private var linkedDocumentAttachments: [MaintenanceAttachment] {
+        documents
+            .filter { linkedDocumentIDs.contains($0.id) }
+            .flatMap(\.attachmentsList)
     }
 
     var body: some View {
@@ -1460,9 +1470,17 @@ struct WarrantyEventEditorSheet: View {
                         )
                     }
 
-                    if !linkableDocuments.isEmpty, !isCostItem {
-                        AppSettingsSection("Linked documents", caption: "Attach existing warranty paperwork to this event.") {
-                            VStack(alignment: .leading, spacing: 8) {
+                    AppSettingsSection(
+                        "Documents",
+                        caption: "Files added here are also stored in Documents. You can link paperwork you already added there."
+                    ) {
+                        VStack(alignment: .leading, spacing: AppScreenMetrics.fieldSpacing) {
+                            if linkableDocuments.isEmpty {
+                                Text("No documents yet. Add a file below, or create one in Documents and link it here.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(AppColors.textSupporting)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
                                 ForEach(linkableDocuments) { doc in
                                     Toggle(isOn: Binding(
                                         get: { linkedDocumentIDs.contains(doc.id) },
@@ -1476,14 +1494,13 @@ struct WarrantyEventEditorSheet: View {
                                     }
                                 }
                             }
-                        }
-                    }
 
-                    if let event {
-                        WarrantyEventAttachmentSection(
-                            event: event,
-                            pendingAttachments: $pendingAttachments
-                        )
+                            WarrantyEventAttachmentSection(
+                                event: event,
+                                linkedAttachments: linkedDocumentAttachments,
+                                pendingAttachments: $pendingAttachments
+                            )
+                        }
                     }
 
                     AppPrimaryButton(
@@ -1514,6 +1531,12 @@ struct WarrantyEventEditorSheet: View {
                     Button("Close") { dismiss() }
                 }
             }
+            .onAppear {
+                if let event {
+                    WarrantyStore.promoteEventAttachmentsToDocuments(events: [event], in: modelContext)
+                    linkedDocumentIDs = Set(event.linkedDocumentIDs)
+                }
+            }
         }
     }
 
@@ -1542,11 +1565,7 @@ struct WarrantyEventEditorSheet: View {
             in: modelContext
         )
         if !pendingAttachments.isEmpty {
-            MaintenanceAttachmentStore.save(
-                drafts: pendingAttachments,
-                to: .warrantyEvent(target),
-                in: modelContext
-            )
+            WarrantyStore.attachDrafts(pendingAttachments, to: target, in: modelContext)
         }
         if repeatYearly {
             WarrantyStore.ensureYearlyRepeats(for: plan, matching: target, in: modelContext)
@@ -1558,7 +1577,8 @@ struct WarrantyEventEditorSheet: View {
 private struct WarrantyEventAttachmentSection: View {
     @Environment(\.modelContext) private var modelContext
 
-    let event: WarrantyEvent
+    let event: WarrantyEvent?
+    let linkedAttachments: [MaintenanceAttachment]
     @Binding var pendingAttachments: [MaintenanceAttachmentDraft]
 
     @State private var showSourceDialog = false
@@ -1566,17 +1586,26 @@ private struct WarrantyEventAttachmentSection: View {
     @State private var showFileImporter = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
 
+    private var existingAttachments: [MaintenanceAttachment] {
+        let eventOwned = event?.attachmentsList ?? []
+        var seen = Set(eventOwned.map(\.id))
+        var combined = eventOwned
+        for attachment in linkedAttachments where seen.insert(attachment.id).inserted {
+            combined.append(attachment)
+        }
+        return combined
+    }
+
     var body: some View {
-        AppSettingsSection("Evidence attachments", caption: "Photos, scans and PDFs saved locally with this event.") {
-            VStack(alignment: .leading, spacing: AppScreenMetrics.fieldSpacing) {
-                if event.attachmentsList.isEmpty && pendingAttachments.isEmpty {
-                    Text("No attachments yet.")
+        VStack(alignment: .leading, spacing: AppScreenMetrics.fieldSpacing) {
+                if existingAttachments.isEmpty && pendingAttachments.isEmpty {
+                    Text("No files attached to this event yet.")
                         .font(.subheadline)
                         .foregroundStyle(AppColors.textSupporting)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: AppScreenMetrics.controlSpacing) {
-                            ForEach(event.attachmentsList) { attachment in
+                            ForEach(existingAttachments) { attachment in
                                 WarrantyAttachmentThumbnail(
                                     title: attachment.displayName,
                                     image: MaintenanceAttachmentStore.loadThumbnail(for: attachment),
@@ -1599,12 +1628,11 @@ private struct WarrantyEventAttachmentSection: View {
                     }
                 }
 
-                AppSecondaryButton("Add attachment") {
+                AppSecondaryButton("Add file") {
                     showSourceDialog = true
                 }
-            }
         }
-        .confirmationDialog("Add attachment", isPresented: $showSourceDialog) {
+        .confirmationDialog("Add file", isPresented: $showSourceDialog) {
             Button("Choose From Photos") { showLibraryPicker = true }
             Button("Choose From Files") { showFileImporter = true }
             Button("Cancel", role: .cancel) {}

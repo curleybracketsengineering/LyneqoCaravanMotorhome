@@ -25,14 +25,12 @@ enum MaintenancePadTab: String, CaseIterable, Identifiable {
     case maintenance = "Maintenance"
     case tyre = "Tyre Safety"
     case warranty = "Service & warranty"
+    case documents = "Documents"
 
     var id: String { rawValue }
 
     static func tabs(warrantyAvailable: Bool) -> [MaintenancePadTab] {
-        if warrantyAvailable {
-            return allCases
-        }
-        return allCases.filter { $0 != .warranty }
+        allCases.filter { warrantyAvailable || $0 != .warranty }
     }
 }
 
@@ -78,6 +76,9 @@ struct MaintenancePadView: View {
                 case .warranty:
                     WarrantyView()
                         .environment(\.usePadLayout, false)
+                case .documents:
+                    DocumentsPadView()
+                        .environment(\.usePadLayout, false)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -106,7 +107,8 @@ struct CarePadView: View {
 
 struct DocumentsPadView: View {
     var body: some View {
-        DocumentsView()
-            .navigationTitle("Documents")
+        NavigationStack {
+            DocumentsView()
+        }
     }
 }

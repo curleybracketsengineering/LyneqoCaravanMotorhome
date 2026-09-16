@@ -1,4 +1,5 @@
 import SwiftData
+import UIKit
 import XCTest
 @testable import loadMate3
 
@@ -305,6 +306,41 @@ final class WarrantySupportTests: XCTestCase {
             Set(docs.map(\.id)),
             Set([warrantyDoc.id, flaggedOther.id, alreadyLinkedCRiS.id])
         )
+    }
+
+    func testDocumentsAvailableToLinkIncludeInsuranceAndExcludeUnlinkedIdentity() {
+        let vehicleID = UUID()
+
+        let insurance = DocumentRecord(vehicleID: vehicleID)
+        insurance.category = .insurance
+        let purchase = DocumentRecord(vehicleID: vehicleID)
+        purchase.category = .purchaseInvoice
+        let cris = DocumentRecord(vehicleID: vehicleID)
+        cris.category = .crisRegistration
+        let linkedCris = DocumentRecord(vehicleID: vehicleID)
+        linkedCris.category = .vinChassisInformation
+
+        let docs = WarrantySupport.documentsAvailableToLink(
+            from: [insurance, purchase, cris, linkedCris],
+            alreadyLinkedIDs: [linkedCris.id]
+        )
+        XCTAssertEqual(
+            Set(docs.map(\.id)),
+            Set([insurance.id, purchase.id, linkedCris.id])
+        )
+    }
+
+    func testEventsLinkedToDocument() {
+        let vehicleID = UUID()
+        let document = DocumentRecord(vehicleID: vehicleID)
+        let yearOne = WarrantyEvent(vehicleID: vehicleID)
+        yearOne.yearNumber = 1
+        yearOne.linkedDocumentIDs = [document.id]
+        let yearTwo = WarrantyEvent(vehicleID: vehicleID)
+        yearTwo.yearNumber = 2
+
+        let linked = WarrantySupport.events(linkedTo: document.id, from: [yearOne, yearTwo])
+        XCTAssertEqual(linked.map(\.id), [yearOne.id])
     }
 
     func testCoverageStatusUsesDurationWhenNoExplicitExpiry() throws {
@@ -857,5 +893,204 @@ final class WarrantySupportTests: XCTestCase {
         event.actualCost = 250
         XCTAssertEqual(WarrantySupport.costCaption(for: event), Formatters.currency(250))
         XCTAssertTrue(WarrantySupport.hasRecordedCost(for: event))
+    }
+
+    func testPromoteEventAttachmentsCreatesLinkedDocument() throws {
+        let vehicleID = UUID()
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        event.yearNumber = 1
+        event.serviceType = .normalService
+        event.scheduledDate = Date()
+        context.insert(event)
+
+        let attachment = MaintenanceAttachment(
+            vehicleID: vehicleID,
+            localFileName: "invoice.jpg",
+            fileType: .photo,
+            displayName: "Purchase invoice",
+            utiIdentifier: "public.jpeg",
+            byteCount: 12
+        )
+        attachment.warrantyEvent = event
+        context.insert(attachment)
+        try context.save()
+
+        XCTAssertEqual(event.attachmentsList.count, 1)
+        let moved = WarrantyStore.promoteEventAttachmentsToDocuments(events: [event], in: context)
+        XCTAssertEqual(moved, 1)
+        XCTAssertTrue(event.attachmentsList.isEmpty)
+        XCTAssertEqual(event.linkedDocumentIDs.count, 1)
+
+        let documents = try context.fetch(FetchDescriptor<DocumentRecord>())
+        let document = try XCTUnwrap(documents.first)
+        XCTAssertEqual(document.vehicleID, vehicleID)
+        XCTAssertEqual(document.category, .serviceHistory)
+        XCTAssertTrue(document.isWarrantyRelated)
+        XCTAssertEqual(document.attachmentsList.count, 1)
+        XCTAssertEqual(document.attachmentsList.first?.id, attachment.id)
+        XCTAssertNil(attachment.warrantyEvent)
+
+        let movedAgain = WarrantyStore.promoteEventAttachmentsToDocuments(events: [event], in: context)
+        XCTAssertEqual(movedAgain, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DocumentRecord>()).count, 1)
+    }
+
+    func testAttachDraftsStoresFilesOnDocumentAndLinksEvent() throws {
+        let vehicleID = UUID()
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        event.yearNumber = 3
+        event.serviceType = .serviceWithBodyCheck
+        context.insert(event)
+
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 60)).image { ctx in
+            UIColor.green.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 80, height: 60))
+        }
+        let draft = try MaintenanceAttachmentStore.draft(
+            image: image,
+            fileType: .photo,
+            displayName: "Damp report"
+        )
+
+        WarrantyStore.attachDrafts([draft], to: event, in: context)
+
+        let documents = try context.fetch(FetchDescriptor<DocumentRecord>())
+        XCTAssertEqual(documents.count, 1)
+        let document = try XCTUnwrap(documents.first)
+        XCTAssertTrue(event.linkedDocumentIDs.contains(document.id))
+        XCTAssertEqual(document.category, .serviceHistory)
+        XCTAssertEqual(document.attachmentsList.count, 1)
+        XCTAssertTrue(event.attachmentsList.isEmpty)
+
+        WarrantyStore.attachDrafts([draft], to: event, in: context)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DocumentRecord>()).count, 1)
+        XCTAssertEqual(document.attachmentsList.count, 2)
+    }
+
+    func testSetLinkedEventsFromDocumentKeepsBothSidesInSync() throws {
+        let vehicleID = UUID()
+        let document = DocumentRecord(vehicleID: vehicleID)
+        document.category = .purchaseInvoice
+        context.insert(document)
+
+        let yearOne = WarrantyEvent(vehicleID: vehicleID)
+        yearOne.yearNumber = 1
+        context.insert(yearOne)
+        let yearTwo = WarrantyEvent(vehicleID: vehicleID)
+        yearTwo.yearNumber = 2
+        context.insert(yearTwo)
+
+        WarrantyStore.setLinkedEvents(
+            for: document,
+            eventIDs: [yearOne.id],
+            among: [yearOne, yearTwo],
+            in: context
+        )
+        XCTAssertEqual(yearOne.linkedDocumentIDs, [document.id])
+        XCTAssertTrue(yearTwo.linkedDocumentIDs.isEmpty)
+        XCTAssertTrue(document.isWarrantyRelated)
+
+        WarrantyStore.setLinkedEvents(
+            for: document,
+            eventIDs: [yearTwo.id],
+            among: [yearOne, yearTwo],
+            in: context
+        )
+        XCTAssertTrue(yearOne.linkedDocumentIDs.isEmpty)
+        XCTAssertEqual(yearTwo.linkedDocumentIDs, [document.id])
+
+        WarrantyStore.setLinkedEvents(
+            for: document,
+            eventIDs: [],
+            among: [yearOne, yearTwo],
+            in: context
+        )
+        XCTAssertTrue(yearOne.linkedDocumentIDs.isEmpty)
+        XCTAssertTrue(yearTwo.linkedDocumentIDs.isEmpty)
+        XCTAssertTrue(document.isWarrantyRelated)
+    }
+
+    func testUnlinkingInsuranceClearsWarrantyFlag() throws {
+        let vehicleID = UUID()
+        let document = DocumentRecord(vehicleID: vehicleID)
+        document.category = .insurance
+        context.insert(document)
+
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        context.insert(event)
+
+        WarrantyStore.setLinkedEvents(
+            for: document,
+            eventIDs: [event.id],
+            among: [event],
+            in: context
+        )
+        XCTAssertTrue(document.isWarrantyRelated)
+
+        WarrantyStore.setLinkedEvents(
+            for: document,
+            eventIDs: [],
+            among: [event],
+            in: context
+        )
+        XCTAssertFalse(document.isWarrantyRelated)
+    }
+
+    func testLinkedServiceYearLabelShowsYearOrCount() {
+        XCTAssertNil(WarrantySupport.linkedServiceYearLabel(from: []))
+        XCTAssertEqual(WarrantySupport.linkedServiceYearLabel(from: ["Year 1"]), "Year 1")
+        XCTAssertEqual(
+            WarrantySupport.linkedServiceYearLabel(from: ["Year 1", "Year 3"]),
+            "2 service events"
+        )
+    }
+
+    func testDeletingEventPromotesAttachmentsAndKeepsDocument() throws {
+        let vehicleID = UUID()
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        event.yearNumber = 2
+        event.serviceType = .normalService
+        context.insert(event)
+
+        let attachment = MaintenanceAttachment(
+            vehicleID: vehicleID,
+            localFileName: "invoice.jpg",
+            fileType: .photo,
+            displayName: "Service invoice",
+            utiIdentifier: "public.jpeg",
+            byteCount: 12
+        )
+        attachment.warrantyEvent = event
+        context.insert(attachment)
+        try context.save()
+
+        WarrantyStore.delete(event: event, in: context)
+
+        XCTAssertTrue(try context.fetch(FetchDescriptor<WarrantyEvent>()).isEmpty)
+        let documents = try context.fetch(FetchDescriptor<DocumentRecord>())
+        XCTAssertEqual(documents.count, 1)
+        let document = try XCTUnwrap(documents.first)
+        XCTAssertEqual(document.attachmentsList.map(\.id), [attachment.id])
+        XCTAssertNil(attachment.warrantyEvent)
+        XCTAssertEqual(attachment.documentRecord?.id, document.id)
+    }
+
+    func testUnlinkLeavesDocumentInPlace() throws {
+        let vehicleID = UUID()
+        let document = DocumentRecord(vehicleID: vehicleID)
+        document.category = .serviceHistory
+        context.insert(document)
+
+        let event = WarrantyEvent(vehicleID: vehicleID)
+        event.yearNumber = 1
+        context.insert(event)
+
+        WarrantyStore.link(document: document, to: event, in: context)
+        XCTAssertEqual(event.linkedDocumentIDs, [document.id])
+
+        WarrantyStore.unlink(documentID: document.id, from: event, in: context)
+        XCTAssertTrue(event.linkedDocumentIDs.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DocumentRecord>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DocumentRecord>()).first?.id, document.id)
     }
 }
