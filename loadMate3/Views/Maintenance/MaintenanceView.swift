@@ -1049,6 +1049,7 @@ struct DocumentRecordEditorView: View {
     let profile: VehicleProfile
     let record: DocumentRecord?
 
+    @State private var workingRecord: DocumentRecord?
     @State private var title: String
     @State private var category: DocumentCategory
     @State private var dateAdded: Date
@@ -1058,10 +1059,12 @@ struct DocumentRecordEditorView: View {
     @State private var reminderDate: Date
     @State private var notes: String
     @State private var pendingAttachments: [MaintenanceAttachmentDraft] = []
+    @State private var attachmentsRevision = 0
 
     init(profile: VehicleProfile, record: DocumentRecord? = nil) {
         self.profile = profile
         self.record = record
+        _workingRecord = State(initialValue: record)
         _title = State(initialValue: record?.title ?? "")
         _category = State(initialValue: record?.category ?? .other)
         _dateAdded = State(initialValue: record?.dateAdded ?? Date())
@@ -1074,13 +1077,14 @@ struct DocumentRecordEditorView: View {
 
     var body: some View {
         let _ = sidecarPhotos.revision
+        let _ = attachmentsRevision
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: AppScreenMetrics.sectionSpacing) {
                     AppHeroSection(
                         systemImage: "doc.text.image",
                         title: record == nil ? "New document" : "Document",
-                        subtitle: "Store certificates, invoices, manuals and scanned paperwork locally on this device."
+                        subtitle: "Store certificates, invoices, manuals and scanned paperwork. Files sync to your other devices over iCloud."
                     )
 
                     AppSettingsSection("Details") {
@@ -1109,14 +1113,15 @@ struct DocumentRecordEditorView: View {
 
                     MaintenanceAttachmentEditorSection(
                         pendingAttachments: $pendingAttachments,
-                        existingAttachments: record?.attachmentsList ?? [],
+                        existingAttachments: workingRecord?.attachmentsList ?? [],
                         onDeleteExisting: { attachment in
                             MaintenanceAttachmentStore.delete(attachment, in: modelContext)
+                            attachmentsRevision += 1
                         }
                     )
 
                     AppPrimaryButton(record == nil ? "Save document" : "Save changes", systemImage: "checkmark.circle.fill") {
-                        save()
+                        saveAndDismiss()
                     }
                 }
                 .padding(.horizontal, AppScreenMetrics.horizontalPadding)
@@ -1128,19 +1133,65 @@ struct DocumentRecordEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Close") { close() }
                 }
             }
             .onAppear {
-                for attachment in record?.attachmentsList ?? [] {
+                for attachment in workingRecord?.attachmentsList ?? [] {
                     CloudKitSidecarPhotoSync.shared.downloadAttachmentIfNeeded(attachment)
                 }
+            }
+            .onChange(of: pendingAttachments.count) { _, _ in
+                persistPendingAttachments()
+            }
+            .onDisappear {
+                flushIfNeeded()
             }
         }
     }
 
-    private func save() {
-        let target = record ?? DocumentStore.createRecord(for: profile.id, in: modelContext)
+    private var shouldPersistOnClose: Bool {
+        workingRecord != nil
+            || !pendingAttachments.isEmpty
+            || !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || hasExpiryDate
+            || hasReminderDate
+            || (record == nil && category != .other)
+    }
+
+    private func close() {
+        flushIfNeeded()
+        dismiss()
+    }
+
+    private func saveAndDismiss() {
+        persistDocument()
+        dismiss()
+    }
+
+    private func flushIfNeeded() {
+        guard shouldPersistOnClose else { return }
+        persistDocument()
+    }
+
+    private func persistDocument() {
+        let target = ensureRecord()
+        persistPendingAttachments()
+        persistMetadata(to: target)
+    }
+
+    private func ensureRecord() -> DocumentRecord {
+        if let workingRecord {
+            return workingRecord
+        }
+        let created = DocumentStore.createRecord(for: profile.id, in: modelContext)
+        workingRecord = created
+        persistMetadata(to: created)
+        return created
+    }
+
+    private func persistMetadata(to target: DocumentRecord) {
         DocumentStore.save(
             record: target,
             title: title.isEmpty ? category.displayName : title,
@@ -1151,14 +1202,19 @@ struct DocumentRecordEditorView: View {
             notes: notes,
             in: modelContext
         )
-        if !pendingAttachments.isEmpty {
-            MaintenanceAttachmentStore.save(
-                drafts: pendingAttachments,
-                to: .document(target),
-                in: modelContext
-            )
-        }
-        dismiss()
+    }
+
+    private func persistPendingAttachments() {
+        guard !pendingAttachments.isEmpty else { return }
+        let target = ensureRecord()
+        let drafts = pendingAttachments
+        pendingAttachments = []
+        MaintenanceAttachmentStore.save(
+            drafts: drafts,
+            to: .document(target),
+            in: modelContext
+        )
+        attachmentsRevision += 1
     }
 }
 
@@ -1353,7 +1409,7 @@ struct MaintenanceAttachmentEditorSection: View {
     @State private var previewAttachment: AttachmentPreviewSource?
 
     var body: some View {
-        AppSettingsSection("Attachments", caption: "Photos, scans, PDFs and imported files are saved locally with this record.") {
+        AppSettingsSection("Attachments", caption: "Photos, scans, PDFs and imported files sync with this record over iCloud.") {
             VStack(alignment: .leading, spacing: AppScreenMetrics.fieldSpacing) {
                 if existingAttachments.isEmpty && pendingAttachments.isEmpty {
                     Text("No attachments yet.")

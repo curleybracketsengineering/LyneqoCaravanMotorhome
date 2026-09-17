@@ -183,7 +183,16 @@ enum MaintenanceAttachmentStore {
 
     static func save(drafts: [MaintenanceAttachmentDraft], to owner: MaintenanceAttachmentOwner, in context: ModelContext) {
         for draft in drafts {
-            _ = try? save(draft: draft, to: owner, in: context)
+            do {
+                _ = try save(draft: draft, to: owner, in: context)
+            } catch {
+                Task { @MainActor in
+                    SyncDebugLogger.shared.record(
+                        category: "attachment",
+                        message: "Failed to save \(draft.displayName) (\(draft.fileType.rawValue), \(draft.data.count) bytes): \(error.localizedDescription)"
+                    )
+                }
+            }
         }
     }
 

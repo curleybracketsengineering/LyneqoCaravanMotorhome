@@ -41,4 +41,20 @@ final class CloudKitSidecarPhotoStoreTests: XCTestCase {
         XCTAssertTrue(CloudKitSidecarPhotoStore.isUnknownItem(unknown))
         XCTAssertFalse(CloudKitSidecarPhotoStore.isUnknownItem(CKError(.networkUnavailable)))
     }
+
+    func testCopyForUploadLeavesOriginalFileInPlace() throws {
+        let original = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lyneqo-original-\(UUID().uuidString).pdf")
+        let bytes = Data([0x25, 0x50, 0x44, 0x46, 0x2D])
+        try bytes.write(to: original, options: .atomic)
+        defer { try? FileManager.default.removeItem(at: original) }
+
+        let copy = try CloudKitSidecarPhotoStore.copyForUpload(original)
+        defer { try? FileManager.default.removeItem(at: copy) }
+
+        XCTAssertNotEqual(original.path, copy.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+        XCTAssertEqual(try Data(contentsOf: original), bytes)
+        XCTAssertEqual(try Data(contentsOf: copy), bytes)
+    }
 }

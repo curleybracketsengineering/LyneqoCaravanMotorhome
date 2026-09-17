@@ -105,6 +105,38 @@ final class MaintenanceAttachmentStoreTests: XCTestCase {
 
         XCTAssertEqual(attachment.fileType, .scannedDocument)
         XCTAssertEqual(attachment.pageCount, 1)
+        XCTAssertNil(attachment.fileData)
+        XCTAssertNil(attachment.thumbnailData)
         XCTAssertNotNil(MaintenanceAttachmentStore.loadThumbnail(for: attachment))
+        let url = try MaintenanceAttachmentStore.fileURL(vehicleID: vehicleID, fileName: attachment.localFileName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    func testSaveDraftsToDocumentKeepsFilesOnDisk() throws {
+        let vehicleID = UUID()
+        let document = DocumentRecord(vehicleID: vehicleID)
+        document.title = "CRiS Registration"
+        context.insert(document)
+
+        let pdfData = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 200, height: 200)).pdfData { context in
+            context.beginPage()
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 200, height: 200))
+        }
+        let draft = MaintenanceAttachmentStore.draft(
+            pdfData: pdfData,
+            displayName: "CRIS number",
+            pageCount: 1,
+            fileType: .pdf
+        )
+
+        MaintenanceAttachmentStore.save(drafts: [draft], to: .document(document), in: context)
+
+        XCTAssertEqual(document.attachmentsList.count, 1)
+        let attachment = try XCTUnwrap(document.attachmentsList.first)
+        XCTAssertEqual(attachment.documentRecord?.id, document.id)
+        XCTAssertNil(attachment.fileData)
+        let url = try MaintenanceAttachmentStore.fileURL(vehicleID: vehicleID, fileName: attachment.localFileName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 }

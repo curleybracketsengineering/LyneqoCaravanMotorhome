@@ -66,8 +66,19 @@ enum CloudKitSidecarPhotoStore {
         record[ownerField] = ownerID.uuidString as CKRecordValue
         record[fileNameField] = fileURL.lastPathComponent as CKRecordValue
         record[byteCountField] = NSNumber(value: byteCount)
-        record[assetField] = CKAsset(fileURL: fileURL)
+        // Copy first so CloudKit cannot consume the live Application Support file.
+        let uploadURL = try copyForUpload(fileURL)
+        defer { try? FileManager.default.removeItem(at: uploadURL) }
+        record[assetField] = CKAsset(fileURL: uploadURL)
         _ = try await database.save(record)
+    }
+
+    /// Temporary copy for `CKAsset`. The live sidecar file stays in Application Support.
+    static func copyForUpload(_ fileURL: URL) throws -> URL {
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lyneqo-sidecar-\(UUID().uuidString)-\(fileURL.lastPathComponent)")
+        try FileManager.default.copyItem(at: fileURL, to: temp)
+        return temp
     }
 
     @discardableResult
@@ -134,12 +145,15 @@ enum CloudKitSidecarPhotoStore {
 actor CloudKitSidecarPhotoWorker {
     static let shared = CloudKitSidecarPhotoWorker()
 
-    func upload(kind: CloudKitSidecarPhotoKind, ownerID: UUID, fileURL: URL) async {
+    @discardableResult
+    func upload(kind: CloudKitSidecarPhotoKind, ownerID: UUID, fileURL: URL) async -> Bool {
         do {
             try await CloudKitSidecarPhotoStore.upload(kind: kind, ownerID: ownerID, fileURL: fileURL)
             log("upload OK \(kind.recordName(ownerID: ownerID))")
+            return true
         } catch {
             log("upload FAILED \(kind.recordName(ownerID: ownerID)) — \(CloudSyncErrorFormatting.flatten(error).joined(separator: " | "))")
+            return false
         }
     }
 

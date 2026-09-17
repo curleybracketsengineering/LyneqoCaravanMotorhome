@@ -6,7 +6,7 @@ enum DocumentStore {
     static func createRecord(for vehicleID: UUID, in context: ModelContext) -> DocumentRecord {
         let record = DocumentRecord(vehicleID: vehicleID)
         context.insert(record)
-        try? context.save()
+        _ = SyncDebugSaveHelper.save(context, source: "DocumentStore.createRecord")
         return record
     }
 
@@ -30,6 +30,6 @@ enum DocumentStore {
         record.isWarrantyRelated = isWarrantyRelated
             || WarrantySupport.warrantyDocumentCategories.contains(category)
         record.updatedAt = Date()
-        try? context.save()
+        _ = SyncDebugSaveHelper.save(context, source: "DocumentStore.save")
     }
 }

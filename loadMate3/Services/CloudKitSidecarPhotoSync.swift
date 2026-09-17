@@ -15,23 +15,19 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
     private init() {}
 
     func uploadAttachment(_ attachment: MaintenanceAttachment) {
-        uploadIfFileExists(
-            kind: .attachmentFile,
-            ownerID: attachment.id,
-            url: try? MaintenanceAttachmentStore.fileURL(
+        uploadIfFileExists(kind: .attachmentFile, ownerID: attachment.id) {
+            try? MaintenanceAttachmentStore.fileURL(
                 vehicleID: attachment.vehicleID,
                 fileName: attachment.localFileName
             )
-        )
+        }
         if let thumbnailFileName = attachment.thumbnailFileName {
-            uploadIfFileExists(
-                kind: .attachmentThumbnail,
-                ownerID: attachment.id,
-                url: try? MaintenanceAttachmentStore.fileURL(
+            uploadIfFileExists(kind: .attachmentThumbnail, ownerID: attachment.id) {
+                try? MaintenanceAttachmentStore.fileURL(
                     vehicleID: attachment.vehicleID,
                     fileName: thumbnailFileName
                 )
-            )
+            }
         }
     }
 
@@ -39,22 +35,24 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
         downloadIfMissing(
             kind: .attachmentFile,
             ownerID: attachment.id,
-            fileName: attachment.localFileName,
-            url: try? MaintenanceAttachmentStore.fileURL(
+            fileName: attachment.localFileName
+        ) {
+            try? MaintenanceAttachmentStore.fileURL(
                 vehicleID: attachment.vehicleID,
                 fileName: attachment.localFileName
             )
-        )
+        }
         if let thumbnailFileName = attachment.thumbnailFileName {
             downloadIfMissing(
                 kind: .attachmentThumbnail,
                 ownerID: attachment.id,
-                fileName: thumbnailFileName,
-                url: try? MaintenanceAttachmentStore.fileURL(
+                fileName: thumbnailFileName
+            ) {
+                try? MaintenanceAttachmentStore.fileURL(
                     vehicleID: attachment.vehicleID,
                     fileName: thumbnailFileName
                 )
-            )
+            }
         }
     }
 
@@ -66,26 +64,25 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
     }
 
     func uploadPlate(_ profile: VehicleProfile) {
-        uploadIfFileExists(
-            kind: .plate,
-            ownerID: profile.id,
-            url: try? VehiclePlatePhotoStore.fileURL(
+        uploadIfFileExists(kind: .plate, ownerID: profile.id) {
+            try? VehiclePlatePhotoStore.fileURL(
                 vehicleID: profile.id,
                 fileName: profile.manufacturerPlatePhotoFileName
             )
-        )
+        }
     }
 
     func downloadPlateIfNeeded(_ profile: VehicleProfile) {
         downloadIfMissing(
             kind: .plate,
             ownerID: profile.id,
-            fileName: profile.manufacturerPlatePhotoFileName,
-            url: try? VehiclePlatePhotoStore.fileURL(
+            fileName: profile.manufacturerPlatePhotoFileName
+        ) {
+            try? VehiclePlatePhotoStore.fileURL(
                 vehicleID: profile.id,
                 fileName: profile.manufacturerPlatePhotoFileName
             )
-        )
+        }
     }
 
     func deletePlate(profileID: UUID) {
@@ -93,26 +90,25 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
     }
 
     func uploadAccidentPhoto(_ photo: AccidentPhoto) {
-        uploadIfFileExists(
-            kind: .accident,
-            ownerID: photo.id,
-            url: try? AccidentPhotoStore.fileURL(
+        uploadIfFileExists(kind: .accident, ownerID: photo.id) {
+            try? AccidentPhotoStore.fileURL(
                 vehicleID: photo.vehicleID,
                 fileName: photo.localFileName
             )
-        )
+        }
     }
 
     func downloadAccidentPhotoIfNeeded(_ photo: AccidentPhoto) {
         downloadIfMissing(
             kind: .accident,
             ownerID: photo.id,
-            fileName: photo.localFileName,
-            url: try? AccidentPhotoStore.fileURL(
+            fileName: photo.localFileName
+        ) {
+            try? AccidentPhotoStore.fileURL(
                 vehicleID: photo.vehicleID,
                 fileName: photo.localFileName
             )
-        )
+        }
     }
 
     func deleteAccidentPhoto(id: UUID) {
@@ -120,20 +116,19 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
     }
 
     func uploadTyrePhoto(_ photo: TyrePhoto, vehicleID: UUID) {
-        uploadIfFileExists(
-            kind: .tyre,
-            ownerID: photo.id,
-            url: try? TyrePhotoStore.fileURL(vehicleID: vehicleID, fileName: photo.localFileName)
-        )
+        uploadIfFileExists(kind: .tyre, ownerID: photo.id) {
+            try? TyrePhotoStore.fileURL(vehicleID: vehicleID, fileName: photo.localFileName)
+        }
     }
 
     func downloadTyrePhotoIfNeeded(_ photo: TyrePhoto, vehicleID: UUID) {
         downloadIfMissing(
             kind: .tyre,
             ownerID: photo.id,
-            fileName: photo.localFileName,
-            url: try? TyrePhotoStore.fileURL(vehicleID: vehicleID, fileName: photo.localFileName)
-        )
+            fileName: photo.localFileName
+        ) {
+            try? TyrePhotoStore.fileURL(vehicleID: vehicleID, fileName: photo.localFileName)
+        }
     }
 
     func deleteTyrePhoto(id: UUID) {
@@ -175,34 +170,58 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
         reconcile(in: context, includeUploads: false)
     }
 
-    private func uploadIfFileExists(kind: CloudKitSidecarPhotoKind, ownerID: UUID, url: URL?) {
-        guard CloudKitSidecarPhotoRuntime.isEnabled,
-              let url,
-              FileManager.default.fileExists(atPath: url.path) else { return }
+    private func uploadIfFileExists(
+        kind: CloudKitSidecarPhotoKind,
+        ownerID: UUID,
+        url: @escaping () -> URL?
+    ) {
+        guard CloudKitSidecarPhotoRuntime.isEnabled else { return }
         let key = "up-\(kind.recordName(ownerID: ownerID))"
+        if let notBefore = nextRetryAt[key], notBefore > Date() { return }
+        guard let initialURL = url(), FileManager.default.fileExists(atPath: initialURL.path) else { return }
         guard inFlight.insert(key).inserted else { return }
         Task {
-            await CloudKitSidecarPhotoWorker.shared.upload(kind: kind, ownerID: ownerID, fileURL: url)
-            inFlight.remove(key)
+            defer { inFlight.remove(key) }
+            for attempt in 0..<8 {
+                guard let fileURL = url(), FileManager.default.fileExists(atPath: fileURL.path) else { return }
+                let ok = await CloudKitSidecarPhotoWorker.shared.upload(
+                    kind: kind,
+                    ownerID: ownerID,
+                    fileURL: fileURL
+                )
+                if ok {
+                    nextRetryAt.removeValue(forKey: key)
+                    return
+                }
+                let seconds = min(2 * (attempt + 1), 15)
+                try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
+            }
+            nextRetryAt[key] = Date().addingTimeInterval(30)
         }
     }
 
-    private func downloadIfMissing(kind: CloudKitSidecarPhotoKind, ownerID: UUID, fileName: String, url: URL?) {
+    private func downloadIfMissing(
+        kind: CloudKitSidecarPhotoKind,
+        ownerID: UUID,
+        fileName: String,
+        url: @escaping () -> URL?
+    ) {
         guard CloudKitSidecarPhotoRuntime.isEnabled else { return }
         let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url else { return }
-        if FileManager.default.fileExists(atPath: url.path) { return }
+        guard !trimmed.isEmpty else { return }
+        if let existing = url(), FileManager.default.fileExists(atPath: existing.path) { return }
         let key = kind.recordName(ownerID: ownerID)
         if let notBefore = nextRetryAt[key], notBefore > Date() { return }
         guard inFlight.insert(key).inserted else { return }
         Task {
             defer { inFlight.remove(key) }
             for attempt in 0..<8 {
-                if FileManager.default.fileExists(atPath: url.path) { return }
+                guard let destination = url() else { return }
+                if FileManager.default.fileExists(atPath: destination.path) { return }
                 let ok = await CloudKitSidecarPhotoWorker.shared.download(
                     kind: kind,
                     ownerID: ownerID,
-                    destinationURL: url
+                    destinationURL: destination
                 )
                 if ok {
                     nextRetryAt.removeValue(forKey: key)

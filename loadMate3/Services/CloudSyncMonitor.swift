@@ -39,7 +39,7 @@ enum CloudSyncAccountStatus: Equatable {
   var settingsDetail: String {
     switch self {
     case .available:
-      return "Your vehicles, loading configurations, load lists, checklists, and photos stay up to date across your iPhone and iPad signed into the same Apple ID."
+      return "Your vehicles, loading configurations, load lists, checklists, documents, and photos stay up to date across your iPhone and iPad signed into the same Apple ID."
     case .noAccount:
       return "Open Settings → Apple Account and sign in to iCloud to sync Lyneqo Caravan & Motorhome between your devices."
     case .restricted:
@@ -663,7 +663,7 @@ final class CloudSyncMonitor: ObservableObject {
         )
         if let context = modelContext {
           CloudKitDeletionSyncVerifier.shared.noteImport(in: context)
-          CloudKitSidecarPhotoSync.shared.reconcileDownloads(in: context)
+          CloudKitSidecarPhotoSync.shared.reconcile(in: context, includeUploads: true)
         }
       case .exportToCloud:
         lastSuccessfulExportAt = finishedAt
