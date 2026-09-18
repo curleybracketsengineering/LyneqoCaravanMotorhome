@@ -88,6 +88,7 @@ enum CloudKitSidecarAssetCanary {
             Result: \(downloaded && downloadedBytes == jpeg.count ? "OK" : "FAILED")
             Preferred type: \(CloudKitSidecarPhotoSchema.preferred.recordType) field=\(CloudKitSidecarPhotoSchema.preferred.assetField)
             Compatible type: \(CloudKitSidecarPhotoSchema.compatible.recordType) field=\(CloudKitSidecarPhotoSchema.compatible.assetField)
+            Production fallback: \(CloudKitSidecarPhotoSchema.productionFallback.recordType) field=\(CloudKitSidecarPhotoSchema.productionFallback.assetField) zone=\(CloudKitSidecarPhotoSchema.sidecarZoneName)
             Record name: \(CloudKitSidecarPhotoKind.plate.recordName(ownerID: ownerID))
             JPEG bytes: \(jpeg.count)
             \(downloadLine)
@@ -102,6 +103,7 @@ enum CloudKitSidecarAssetCanary {
             Result: FAILED
             Preferred type: \(CloudKitSidecarPhotoSchema.preferred.recordType)
             Compatible type: \(CloudKitSidecarPhotoSchema.compatible.recordType)
+            Production fallback: \(CloudKitSidecarPhotoSchema.productionFallback.recordType) zone=\(CloudKitSidecarPhotoSchema.sidecarZoneName)
             JPEG bytes: \(jpeg.count)
             \(flattened)
             \(schemaHint)
@@ -113,7 +115,7 @@ enum CloudKitSidecarAssetCanary {
     private static func schemaHint(for error: Error) -> String {
         if CloudKitSidecarPhotoStore.isSchemaError(error) {
             return """
-            Schema hint: neither sidecar record type saved in this CloudKit environment. Run 34 on an Xcode Development build first so the type can be created, then in CloudKit Console deploy the Development schema to Production before retrying on TestFlight.
+            Schema hint: dedicated sidecar types are missing and the Production fallback (\(CloudKitSidecarPhotoSchema.productionFallback.recordType) in \(CloudKitSidecarPhotoSchema.sidecarZoneName)) also failed. Check iCloud sign-in and that this build includes the CD_* photo fallback.
             """
         }
         return "Schema hint: none — this does not look like a missing record type."

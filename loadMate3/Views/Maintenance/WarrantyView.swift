@@ -1576,6 +1576,7 @@ struct WarrantyEventEditorSheet: View {
 
 private struct WarrantyEventAttachmentSection: View {
     @Environment(\.modelContext) private var modelContext
+    @ObservedObject private var sidecarPhotos = CloudKitSidecarPhotoSync.shared
 
     let event: WarrantyEvent?
     let linkedAttachments: [MaintenanceAttachment]
@@ -1585,6 +1586,7 @@ private struct WarrantyEventAttachmentSection: View {
     @State private var showLibraryPicker = false
     @State private var showFileImporter = false
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
+    @State private var previewAttachment: AttachmentPreviewSource?
 
     private var existingAttachments: [MaintenanceAttachment] {
         let eventOwned = event?.attachmentsList ?? []
@@ -1597,6 +1599,7 @@ private struct WarrantyEventAttachmentSection: View {
     }
 
     var body: some View {
+        let _ = sidecarPhotos.revision
         VStack(alignment: .leading, spacing: AppScreenMetrics.fieldSpacing) {
                 if existingAttachments.isEmpty && pendingAttachments.isEmpty {
                     Text("No files attached to this event yet.")
@@ -1606,21 +1609,25 @@ private struct WarrantyEventAttachmentSection: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: AppScreenMetrics.controlSpacing) {
                             ForEach(existingAttachments) { attachment in
-                                WarrantyAttachmentThumbnail(
+                                AttachmentThumbnailView(
                                     title: attachment.displayName,
                                     image: MaintenanceAttachmentStore.loadThumbnail(for: attachment),
                                     symbolName: symbolName(for: attachment.fileType)
                                 ) {
+                                    previewAttachment = .saved(attachment)
+                                } onDelete: {
                                     MaintenanceAttachmentStore.delete(attachment, in: modelContext)
                                 }
                             }
 
                             ForEach(Array(pendingAttachments.enumerated()), id: \.offset) { index, draft in
-                                WarrantyAttachmentThumbnail(
+                                AttachmentThumbnailView(
                                     title: draft.displayName,
                                     image: draft.thumbnailImage ?? previewImage(for: draft),
                                     symbolName: symbolName(for: draft.fileType)
                                 ) {
+                                    previewAttachment = .pending(draft)
+                                } onDelete: {
                                     pendingAttachments.remove(at: index)
                                 }
                             }
@@ -1659,6 +1666,14 @@ private struct WarrantyEventAttachmentSection: View {
             guard case .success(let urls) = result else { return }
             pendingAttachments.append(contentsOf: urls.compactMap { try? MaintenanceAttachmentStore.draft(fileAt: $0) })
         }
+        .sheet(item: $previewAttachment) { preview in
+            AttachmentPreviewView(preview: preview)
+        }
+        .onAppear {
+            for attachment in existingAttachments {
+                CloudKitSidecarPhotoSync.shared.downloadAttachmentIfNeeded(attachment)
+            }
+        }
     }
 
     private func previewImage(for draft: MaintenanceAttachmentDraft) -> UIImage? {
@@ -1679,47 +1694,6 @@ private struct WarrantyEventAttachmentSection: View {
         case .file:
             return "doc"
         }
-    }
-}
-
-private struct WarrantyAttachmentThumbnail: View {
-    let title: String
-    let image: UIImage?
-    let symbolName: String
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Group {
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(LyneqoTheme.softTeal)
-                        Image(systemName: symbolName)
-                            .font(.title2)
-                            .foregroundStyle(Color.secondary)
-                    }
-                }
-            }
-            .frame(width: 92, height: 92)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(Color.primary)
-                .lineLimit(2)
-                .frame(width: 92, alignment: .leading)
-        }
-        .contextMenu {
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
-            }
-        }
-        .accessibilityLabel(title)
     }
 }
 

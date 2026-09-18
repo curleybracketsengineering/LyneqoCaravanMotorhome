@@ -417,6 +417,8 @@ final class CloudSyncMonitor: ObservableObject {
         "CD_ChecklistItem",
         "CD_LoadedItem",
         "CD_LibraryItem",
+        "CD_MaintenanceAttachment",
+        "CD_TyrePhoto",
       ]
       for recordType in extraTypes {
         probeLines.append(await probeRecordType(recordType, database: database, zoneID: zoneID))
@@ -429,6 +431,25 @@ final class CloudSyncMonitor: ObservableObject {
         probeLines.append(
           await probeRecordType(recordType, database: database, zoneID: defaultZoneID)
         )
+      }
+      let sidecarZoneID = CloudKitSidecarPhotoSchema.sidecarZoneID
+      let sidecarZones = zones.filter { $0.zoneID.zoneName == sidecarZoneID.zoneName }
+      probeLines.append(
+        sidecarZones.isEmpty
+          ? "\(CloudKitSidecarPhotoSchema.sidecarZoneName) zone not created yet"
+          : "\(CloudKitSidecarPhotoSchema.sidecarZoneName) zone present"
+      )
+      if sidecarZones.isEmpty {
+        probeLines.append("Photo sidecar will create \(CloudKitSidecarPhotoSchema.sidecarZoneName) on first upload")
+      } else {
+        for recordType in [
+          CloudKitSidecarPhotoSchema.productionFallback.recordType,
+          CloudKitSidecarPhotoSchema.productionTyreFallback.recordType,
+        ] {
+          probeLines.append(
+            await probeRecordType(recordType, database: database, zoneID: sidecarZoneID)
+          )
+        }
       }
       cloudKitSchemaDetail = probeLines.joined(separator: "\n")
       SyncDebugLogger.shared.record(category: "schema", message: cloudKitSchemaDetail)

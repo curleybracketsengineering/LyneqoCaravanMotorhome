@@ -1550,7 +1550,7 @@ struct AttachmentThumbnailView: View {
     let image: UIImage?
     let symbolName: String
     let onTap: () -> Void
-    let onDelete: () -> Void
+    var onDelete: (() -> Void)? = nil
 
     var body: some View {
         Button(action: onTap) {
@@ -1582,10 +1582,13 @@ struct AttachmentThumbnailView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button(role: .destructive, action: onDelete) {
-                Label("Delete", systemImage: "trash")
+            if let onDelete {
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete", systemImage: "trash")
+                }
             }
         }
+        .accessibilityHint("Shows the full attachment")
     }
 }
 
@@ -1605,9 +1608,11 @@ enum AttachmentPreviewSource: Identifiable {
 
 struct AttachmentPreviewView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var sidecarPhotos = CloudKitSidecarPhotoSync.shared
     let preview: AttachmentPreviewSource
 
     var body: some View {
+        let _ = sidecarPhotos.revision
         NavigationStack {
             Group {
                 switch preview {
@@ -1615,13 +1620,15 @@ struct AttachmentPreviewView: View {
                     previewBody(
                         title: attachment.displayName,
                         fileType: attachment.fileType,
-                        data: MaintenanceAttachmentStore.loadData(for: attachment)
+                        data: MaintenanceAttachmentStore.loadData(for: attachment),
+                        fallbackImage: MaintenanceAttachmentStore.loadThumbnail(for: attachment)
                     )
                 case .pending(let draft):
                     previewBody(
                         title: draft.displayName,
                         fileType: draft.fileType,
-                        data: draft.data
+                        data: draft.data,
+                        fallbackImage: draft.thumbnailImage
                     )
                 }
             }
@@ -1636,31 +1643,34 @@ struct AttachmentPreviewView: View {
     }
 
     @ViewBuilder
-    private func previewBody(title: String, fileType: MaintenanceAttachmentKind, data: Data?) -> some View {
-        if let data {
-            switch fileType {
-            case .pdf, .scannedDocument:
-                PDFDocumentView(data: data)
-            case .photo, .file:
-                if let image = UIImage(data: data) {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: AppScreenMetrics.controlSpacing) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxWidth: .infinity)
-                            Text(title)
-                                .font(.headline)
-                        }
-                        .padding()
-                    }
-                } else {
-                    ContentUnavailableView("Preview unavailable", systemImage: "doc")
+    private func previewBody(
+        title: String,
+        fileType: MaintenanceAttachmentKind,
+        data: Data?,
+        fallbackImage: UIImage?
+    ) -> some View {
+        if let data, fileType == .pdf || fileType == .scannedDocument {
+            PDFDocumentView(data: data)
+        } else if let image = image(from: data) ?? fallbackImage {
+            ScrollView {
+                VStack(alignment: .leading, spacing: AppScreenMetrics.controlSpacing) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                    Text(title)
+                        .font(.headline)
                 }
+                .padding()
             }
         } else {
             ContentUnavailableView("Preview unavailable", systemImage: "doc")
         }
+    }
+
+    private func image(from data: Data?) -> UIImage? {
+        guard let data else { return nil }
+        return UIImage(data: data)
     }
 }
 

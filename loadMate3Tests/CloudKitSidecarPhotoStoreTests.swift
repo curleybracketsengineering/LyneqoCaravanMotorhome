@@ -42,6 +42,30 @@ final class CloudKitSidecarPhotoStoreTests: XCTestCase {
             CloudKitSidecarPhotoSchema.matching(recordType: "LyneqoSidecarPhotoCanary"),
             CloudKitSidecarPhotoSchema.compatible
         )
+        XCTAssertEqual(CloudKitSidecarPhotoSchema.productionFallback.recordType, "CD_MaintenanceAttachment")
+        XCTAssertEqual(CloudKitSidecarPhotoSchema.productionFallback.assetField, "CD_fileData")
+        XCTAssertEqual(CloudKitSidecarPhotoSchema.productionFallback.extraFields, .assetOnly)
+        XCTAssertEqual(
+            CloudKitSidecarPhotoSchema.productionFallback.zoneID.zoneName,
+            CloudKitSidecarPhotoSchema.sidecarZoneName
+        )
+        XCTAssertTrue(CloudKitSidecarPhotoSchema.all.contains(CloudKitSidecarPhotoSchema.productionFallback))
+        XCTAssertEqual(
+            CloudKitSidecarPhotoSchema.matching(recordType: "CD_MaintenanceAttachment"),
+            CloudKitSidecarPhotoSchema.productionFallback
+        )
+        let id = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        XCTAssertEqual(
+            CloudKitSidecarPhotoKind.plate.recordID(ownerID: id).zoneID.zoneName,
+            CKRecordZone.default().zoneID.zoneName
+        )
+        XCTAssertEqual(
+            CloudKitSidecarPhotoKind.plate.recordID(
+                ownerID: id,
+                zoneID: CloudKitSidecarPhotoSchema.sidecarZoneID
+            ).zoneID.zoneName,
+            CloudKitSidecarPhotoSchema.sidecarZoneName
+        )
     }
 
     func testUnknownItemDetection() {
