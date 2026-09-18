@@ -33,13 +33,24 @@ final class CloudKitSidecarPhotoStoreTests: XCTestCase {
     func testRecordTypeAndAssetFieldStayOffSwiftData() {
         XCTAssertEqual(CloudKitSidecarPhotoStore.recordType, "LyneqoSidecarPhoto")
         XCTAssertEqual(CloudKitSidecarPhotoStore.assetField, "file")
+        XCTAssertEqual(CloudKitSidecarPhotoSchema.compatible.recordType, "LyneqoSidecarPhotoCanary")
+        XCTAssertEqual(CloudKitSidecarPhotoSchema.compatible.assetField, "jpeg")
+        XCTAssertEqual(CloudKitSidecarAssetCanary.recordType, CloudKitSidecarPhotoSchema.compatible.recordType)
+        XCTAssertEqual(CloudKitSidecarAssetCanary.assetField, CloudKitSidecarPhotoSchema.compatible.assetField)
         XCTAssertNotEqual(CloudKitSidecarPhotoStore.recordType, CloudKitSidecarAssetCanary.recordType)
+        XCTAssertEqual(
+            CloudKitSidecarPhotoSchema.matching(recordType: "LyneqoSidecarPhotoCanary"),
+            CloudKitSidecarPhotoSchema.compatible
+        )
     }
 
     func testUnknownItemDetection() {
         let unknown = CKError(.unknownItem)
         XCTAssertTrue(CloudKitSidecarPhotoStore.isUnknownItem(unknown))
+        XCTAssertTrue(CloudKitSidecarPhotoStore.isSchemaError(unknown))
+        XCTAssertTrue(CloudKitSidecarPhotoStore.isSchemaError(CKError(.invalidArguments)))
         XCTAssertFalse(CloudKitSidecarPhotoStore.isUnknownItem(CKError(.networkUnavailable)))
+        XCTAssertFalse(CloudKitSidecarPhotoStore.isSchemaError(CKError(.networkUnavailable)))
     }
 
     func testCopyForUploadLeavesOriginalFileInPlace() throws {

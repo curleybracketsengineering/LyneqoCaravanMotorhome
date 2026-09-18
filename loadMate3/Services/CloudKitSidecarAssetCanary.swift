@@ -1,12 +1,12 @@
 import CloudKit
 import Foundation
 
-/// Sync Debug test 34: upload a tiny JPEG as a standalone `CKAsset` (not SwiftData).
-/// Proves whether CloudKit assets work outside `NSPersistentCloudKitContainer`.
+/// Sync Debug test 34: upload through the real sidecar store, then fetch the bytes back.
+/// Uses the same record-name prefix as live plate/tyre/document photos.
 enum CloudKitSidecarAssetCanary {
-    static let recordType = "LyneqoSidecarPhotoCanary"
+    static let recordType = CloudKitSidecarPhotoSchema.compatible.recordType
     static let recordName = "lyneqo-sidecar-photo-canary"
-    static let assetField = "jpeg"
+    static let assetField = CloudKitSidecarPhotoSchema.compatible.assetField
     static let markerField = "marker"
     static let byteCountField = "byteCount"
     static let markerValue = "\(CloudKitDiagnosticMarkers.namePrefix) sidecar-ckasset"
@@ -33,8 +33,10 @@ enum CloudKitSidecarAssetCanary {
         defer { try? FileManager.default.removeItem(at: fileURL) }
 
         let container = CKContainer(identifier: containerID)
-        let database = container.privateCloudDatabase
-        let recordID = CKRecord.ID(recordName: recordName)
+        let ownerID = UUID()
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lyneqo-sidecar-canary-download-\(ownerID.uuidString).jpg")
+        defer { try? FileManager.default.removeItem(at: destination) }
 
         do {
             let status = try await container.accountStatus()
@@ -46,44 +48,51 @@ enum CloudKitSidecarAssetCanary {
                 """
             }
 
-            try? await database.deleteRecord(withID: recordID)
-
-            let record = CKRecord(recordType: recordType, recordID: recordID)
-            record[markerField] = markerValue as CKRecordValue
-            record[byteCountField] = NSNumber(value: jpeg.count)
-            record[assetField] = CKAsset(fileURL: fileURL)
-
-            let saved = try await database.save(record)
-            let fetched = try await database.record(for: saved.recordID)
-            let downloaded = readAssetBytes(from: fetched[assetField] as? CKAsset)
+            try await CloudKitSidecarPhotoStore.upload(
+                kind: .plate,
+                ownerID: ownerID,
+                fileURL: fileURL,
+                containerID: containerID
+            )
+            let downloaded = try await CloudKitSidecarPhotoStore.download(
+                kind: .plate,
+                ownerID: ownerID,
+                destinationURL: destination,
+                containerID: containerID
+            )
+            let downloadedBytes = (try? Data(contentsOf: destination))?.count ?? 0
 
             var deleted = "not attempted"
             do {
-                try await database.deleteRecord(withID: saved.recordID)
+                try await CloudKitSidecarPhotoStore.delete(
+                    kind: .plate,
+                    ownerID: ownerID,
+                    containerID: containerID
+                )
                 deleted = "yes"
             } catch {
                 deleted = "failed — \(error.localizedDescription)"
             }
 
             let downloadLine: String
-            if let downloaded {
-                downloadLine = downloaded == jpeg.count
-                    ? "Download: OK (\(downloaded) bytes)"
-                    : "Download: size mismatch (uploaded \(jpeg.count), fetched \(downloaded))"
+            if downloaded, downloadedBytes == jpeg.count {
+                downloadLine = "Download: OK (\(downloadedBytes) bytes)"
+            } else if downloaded {
+                downloadLine = "Download: size mismatch (uploaded \(jpeg.count), fetched \(downloadedBytes))"
             } else {
-                downloadLine = "Download: no asset bytes on fetched record"
+                downloadLine = "Download: sidecar record was not readable after upload"
             }
 
             return """
             34. Sidecar CKAsset Canary
-            Result: OK
-            Record type: \(recordType)
-            Record name: \(saved.recordID.recordName)
-            Zone: \(saved.recordID.zoneID.zoneName)
+            Result: \(downloaded && downloadedBytes == jpeg.count ? "OK" : "FAILED")
+            Preferred type: \(CloudKitSidecarPhotoSchema.preferred.recordType) field=\(CloudKitSidecarPhotoSchema.preferred.assetField)
+            Compatible type: \(CloudKitSidecarPhotoSchema.compatible.recordType) field=\(CloudKitSidecarPhotoSchema.compatible.assetField)
+            Record name: \(CloudKitSidecarPhotoKind.plate.recordName(ownerID: ownerID))
             JPEG bytes: \(jpeg.count)
             \(downloadLine)
             Deleted canary record: \(deleted)
-            If this is OK, CloudKit assets work outside SwiftData. Photo sharing can use a sidecar CKAsset store.
+            This tests the same upload/download path used by plates, tyres and document files.
             """
         } catch {
             let flattened = CloudSyncErrorFormatting.flatten(error).joined(separator: "\n")
@@ -91,7 +100,8 @@ enum CloudKitSidecarAssetCanary {
             return """
             34. Sidecar CKAsset Canary
             Result: FAILED
-            Record type: \(recordType)
+            Preferred type: \(CloudKitSidecarPhotoSchema.preferred.recordType)
+            Compatible type: \(CloudKitSidecarPhotoSchema.compatible.recordType)
             JPEG bytes: \(jpeg.count)
             \(flattened)
             \(schemaHint)
@@ -100,28 +110,10 @@ enum CloudKitSidecarAssetCanary {
         }
     }
 
-    private static func readAssetBytes(from asset: CKAsset?) -> Int? {
-        guard let url = asset?.fileURL,
-              let data = try? Data(contentsOf: url),
-              !data.isEmpty else {
-            return nil
-        }
-        return data.count
-    }
-
     private static func schemaHint(for error: Error) -> String {
-        let nsError = error as NSError
-        let codes: [Int] = {
-            var values = [nsError.code]
-            if let ckError = error as? CKError, let partial = ckError.partialErrorsByItemID {
-                values.append(contentsOf: partial.values.map { ($0 as NSError).code })
-            }
-            return values
-        }()
-        if codes.contains(CKError.Code.unknownItem.rawValue)
-            || codes.contains(CKError.Code.invalidArguments.rawValue) {
+        if CloudKitSidecarPhotoStore.isSchemaError(error) {
             return """
-            Schema hint: this record type may not exist in this CloudKit environment. Run 34 on an Xcode/simulator Development build first so the type can be created, then in CloudKit Console deploy the Development schema to Production before retrying on TestFlight.
+            Schema hint: neither sidecar record type saved in this CloudKit environment. Run 34 on an Xcode Development build first so the type can be created, then in CloudKit Console deploy the Development schema to Production before retrying on TestFlight.
             """
         }
         return "Schema hint: none — this does not look like a missing record type."

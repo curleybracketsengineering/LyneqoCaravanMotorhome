@@ -421,6 +421,15 @@ final class CloudSyncMonitor: ObservableObject {
       for recordType in extraTypes {
         probeLines.append(await probeRecordType(recordType, database: database, zoneID: zoneID))
       }
+      let defaultZoneID = CKRecordZone.default().zoneID
+      for recordType in [
+        CloudKitSidecarPhotoSchema.preferred.recordType,
+        CloudKitSidecarPhotoSchema.compatible.recordType,
+      ] {
+        probeLines.append(
+          await probeRecordType(recordType, database: database, zoneID: defaultZoneID)
+        )
+      }
       cloudKitSchemaDetail = probeLines.joined(separator: "\n")
       SyncDebugLogger.shared.record(category: "schema", message: cloudKitSchemaDetail)
     } catch let error as CKError where error.code == .unknownItem {

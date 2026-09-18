@@ -33,10 +33,50 @@ enum CloudKitSidecarPhotoRuntime {
     }
 }
 
+enum CloudKitSidecarPhotoStoreError: LocalizedError {
+    case missingLocalFile(URL)
+    case emptyAsset(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingLocalFile(let url):
+            return "Local sidecar file is missing: \(url.lastPathComponent)"
+        case .emptyAsset(let recordName):
+            return "CloudKit saved \(recordName) but the asset had no bytes"
+        }
+    }
+}
+
+/// Schema variants. Test 34 proved `LyneqoSidecarPhotoCanary` + `jpeg` in this container.
+/// Production cannot create a new record type, so uploads fall back to that proven type.
+struct CloudKitSidecarPhotoSchema: Equatable {
+    let recordType: String
+    let assetField: String
+    let writesOwnerFields: Bool
+
+    static let preferred = CloudKitSidecarPhotoSchema(
+        recordType: "LyneqoSidecarPhoto",
+        assetField: "file",
+        writesOwnerFields: true
+    )
+
+    static let compatible = CloudKitSidecarPhotoSchema(
+        recordType: "LyneqoSidecarPhotoCanary",
+        assetField: "jpeg",
+        writesOwnerFields: false
+    )
+
+    static let all = [preferred, compatible]
+
+    static func matching(recordType: String) -> CloudKitSidecarPhotoSchema {
+        all.first { $0.recordType == recordType } ?? compatible
+    }
+}
+
 /// Private-DB `CKAsset` records for photos. Separate from SwiftData so export is not poisoned.
 enum CloudKitSidecarPhotoStore {
-    static let recordType = "LyneqoSidecarPhoto"
-    static let assetField = "file"
+    static let recordType = CloudKitSidecarPhotoSchema.preferred.recordType
+    static let assetField = CloudKitSidecarPhotoSchema.preferred.assetField
     static let kindField = "kind"
     static let ownerField = "ownerID"
     static let fileNameField = "fileName"
@@ -48,29 +88,56 @@ enum CloudKitSidecarPhotoStore {
         fileURL: URL,
         containerID: String = LoadMateModelContainer.cloudKitContainerID
     ) async throws {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
-        let byteCount = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0
-        let database = CKContainer(identifier: containerID).privateCloudDatabase
-        let recordID = kind.recordID(ownerID: ownerID)
-        let record: CKRecord
-        do {
-            record = try await database.record(for: recordID)
-        } catch {
-            if isUnknownItem(error) {
-                record = CKRecord(recordType: recordType, recordID: recordID)
-            } else {
-                throw error
-            }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw CloudKitSidecarPhotoStoreError.missingLocalFile(fileURL)
         }
-        record[kindField] = kind.rawValue as CKRecordValue
-        record[ownerField] = ownerID.uuidString as CKRecordValue
-        record[fileNameField] = fileURL.lastPathComponent as CKRecordValue
-        record[byteCountField] = NSNumber(value: byteCount)
-        // Copy first so CloudKit cannot consume the live Application Support file.
+        let byteCount = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0
         let uploadURL = try copyForUpload(fileURL)
         defer { try? FileManager.default.removeItem(at: uploadURL) }
-        record[assetField] = CKAsset(fileURL: uploadURL)
-        _ = try await database.save(record)
+
+        let database = CKContainer(identifier: containerID).privateCloudDatabase
+        let recordID = kind.recordID(ownerID: ownerID)
+
+        if let existing = try await existingRecord(recordID, database: database) {
+            let schema = CloudKitSidecarPhotoSchema.matching(recordType: existing.recordType)
+            applyAsset(
+                to: existing,
+                schema: schema,
+                kind: kind,
+                ownerID: ownerID,
+                fileName: fileURL.lastPathComponent,
+                byteCount: byteCount,
+                uploadURL: uploadURL
+            )
+            _ = try await database.save(existing)
+            try await verifyAsset(recordID: recordID, database: database)
+            return
+        }
+
+        var lastError: Error = CloudKitSidecarPhotoStoreError.emptyAsset(recordID.recordName)
+        for schema in CloudKitSidecarPhotoSchema.all {
+            do {
+                let record = CKRecord(recordType: schema.recordType, recordID: recordID)
+                applyAsset(
+                    to: record,
+                    schema: schema,
+                    kind: kind,
+                    ownerID: ownerID,
+                    fileName: fileURL.lastPathComponent,
+                    byteCount: byteCount,
+                    uploadURL: uploadURL
+                )
+                _ = try await database.save(record)
+                try await verifyAsset(recordID: recordID, database: database)
+                return
+            } catch {
+                lastError = error
+                if !isSchemaError(error) {
+                    throw error
+                }
+            }
+        }
+        throw lastError
     }
 
     /// Temporary copy for `CKAsset`. The live sidecar file stays in Application Support.
@@ -98,13 +165,9 @@ enum CloudKitSidecarPhotoStore {
             }
             throw error
         }
-        guard let asset = record[assetField] as? CKAsset,
-              let source = asset.fileURL,
-              FileManager.default.fileExists(atPath: source.path) else {
+        guard let data = assetData(from: record), !data.isEmpty else {
             return false
         }
-        let data = try Data(contentsOf: source)
-        guard !data.isEmpty else { return false }
         try FileManager.default.createDirectory(
             at: destinationURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -140,6 +203,73 @@ enum CloudKitSidecarPhotoStore {
         }
         return false
     }
+
+    static func isSchemaError(_ error: Error) -> Bool {
+        if isUnknownItem(error) { return true }
+        let nsError = error as NSError
+        if nsError.domain == CKErrorDomain, nsError.code == CKError.Code.invalidArguments.rawValue {
+            return true
+        }
+        if let ckError = error as? CKError, ckError.code == .invalidArguments {
+            return true
+        }
+        let text = CloudSyncErrorFormatting.flatten(error).joined(separator: " ").lowercased()
+        return text.contains("record type") || text.contains("unknown field") || text.contains("invalid arguments")
+    }
+
+    static func assetData(from record: CKRecord) -> Data? {
+        for field in assetFieldNames {
+            if let asset = record[field] as? CKAsset,
+               let source = asset.fileURL,
+               FileManager.default.fileExists(atPath: source.path),
+               let data = try? Data(contentsOf: source),
+               !data.isEmpty {
+                return data
+            }
+        }
+        return nil
+    }
+
+    private static let assetFieldNames = [
+        CloudKitSidecarPhotoSchema.preferred.assetField,
+        CloudKitSidecarPhotoSchema.compatible.assetField,
+    ]
+
+    private static func existingRecord(_ recordID: CKRecord.ID, database: CKDatabase) async throws -> CKRecord? {
+        do {
+            return try await database.record(for: recordID)
+        } catch {
+            if isUnknownItem(error) { return nil }
+            throw error
+        }
+    }
+
+    private static func applyAsset(
+        to record: CKRecord,
+        schema: CloudKitSidecarPhotoSchema,
+        kind: CloudKitSidecarPhotoKind,
+        ownerID: UUID,
+        fileName: String,
+        byteCount: Int,
+        uploadURL: URL
+    ) {
+        record[schema.assetField] = CKAsset(fileURL: uploadURL)
+        record[byteCountField] = NSNumber(value: byteCount)
+        if schema.writesOwnerFields {
+            record[kindField] = kind.rawValue as CKRecordValue
+            record[ownerField] = ownerID.uuidString as CKRecordValue
+            record[fileNameField] = fileName as CKRecordValue
+        } else {
+            record[CloudKitSidecarAssetCanary.markerField] = kind.rawValue as CKRecordValue
+        }
+    }
+
+    private static func verifyAsset(recordID: CKRecord.ID, database: CKDatabase) async throws {
+        let fetched = try await database.record(for: recordID)
+        guard let data = assetData(from: fetched), !data.isEmpty else {
+            throw CloudKitSidecarPhotoStoreError.emptyAsset(recordID.recordName)
+        }
+    }
 }
 
 actor CloudKitSidecarPhotoWorker {
@@ -166,6 +296,8 @@ actor CloudKitSidecarPhotoWorker {
             )
             if ok {
                 log("download OK \(kind.recordName(ownerID: ownerID))")
+            } else {
+                log("download miss \(kind.recordName(ownerID: ownerID)) — not in CloudKit yet")
             }
             return ok
         } catch {

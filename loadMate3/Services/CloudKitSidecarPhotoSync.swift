@@ -158,8 +158,11 @@ final class CloudKitSidecarPhotoSync: ObservableObject {
             }
         }
         if let photos = try? context.fetch(FetchDescriptor<TyrePhoto>()) {
+            let tyres = (try? context.fetch(FetchDescriptor<TyreRecord>())) ?? []
+            let vehicleIDByTyre = Dictionary(uniqueKeysWithValues: tyres.map { ($0.id, $0.vehicleID) })
             for photo in photos {
-                guard let vehicleID = photo.tyreRecord?.vehicleID else { continue }
+                let vehicleID = photo.tyreRecord?.vehicleID ?? vehicleIDByTyre[photo.tyreRecordID]
+                guard let vehicleID else { continue }
                 if includeUploads { uploadTyrePhoto(photo, vehicleID: vehicleID) }
                 downloadTyrePhotoIfNeeded(photo, vehicleID: vehicleID)
             }

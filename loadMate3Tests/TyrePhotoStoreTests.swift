@@ -40,6 +40,7 @@ final class TyrePhotoStoreTests: XCTestCase {
 
         XCTAssertFalse(photo.localFileName.isEmpty)
         XCTAssertEqual(photo.kind, .sidewall)
+        XCTAssertEqual(photo.tyreRecordID, record.id)
         XCTAssertNil(photo.inspection)
         XCTAssertNil(photo.imageData)
 

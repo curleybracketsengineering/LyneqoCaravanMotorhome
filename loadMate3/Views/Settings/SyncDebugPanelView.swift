@@ -218,7 +218,7 @@ struct SyncDebugPanelView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Text("18 is a SwiftData JPEG (failed). 32 and 33 are metadata (passed). 34 proved a standalone CKAsset works. Real photos now upload on that sidecar path after you save them.")
+                Text("18 is a SwiftData JPEG (failed). 32 and 33 are metadata (passed). 34 tests the real photo sidecar (plates, tyres, documents). A pass on this device is not enough — confirm the photo appears on the other device.")
                     .font(.caption)
                     .foregroundStyle(AppColors.textSupporting)
                     .fixedSize(horizontal: false, vertical: true)
