@@ -37,6 +37,7 @@ struct TripExpenseDraft: Identifiable, Equatable {
 
 enum TripRecordValidationIssue: Equatable, Hashable {
     case blankName
+    case blankOrigin
     case endBeforeStart
     case blankStopLocation
     case departureBeforeArrival
@@ -55,6 +56,8 @@ enum TripRecordValidationIssue: Equatable, Hashable {
         switch self {
         case .blankName:
             return "Enter a trip name."
+        case .blankOrigin:
+            return "Enter where the trip starts from."
         case .endBeforeStart:
             return "The end date cannot be before the start date."
         case .blankStopLocation:
@@ -88,6 +91,7 @@ enum TripRecordValidationIssue: Equatable, Hashable {
 struct TripRecordDraft: Equatable {
     var existingID: UUID?
     var name: String = ""
+    var originName: String = ""
     var startDate: Date = Date()
     var endDate: Date = Date()
     var notes: String = ""
@@ -112,6 +116,7 @@ struct TripRecordDraft: Equatable {
         TripRecordDraft(
             existingID: record.id,
             name: record.name,
+            originName: record.legsList.first?.fromName ?? "",
             startDate: record.startDate,
             endDate: record.endDate ?? record.startDate,
             notes: record.notes,
@@ -168,6 +173,10 @@ struct TripRecordDraft: Equatable {
         var issues: [TripRecordValidationIssue] = []
         if synced.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             issues.append(.blankName)
+        }
+        if !synced.legs.isEmpty,
+           synced.originName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append(.blankOrigin)
         }
 
         let startDay = Calendar.current.startOfDay(for: synced.startDate)
@@ -251,6 +260,7 @@ struct TripRecordDraft: Equatable {
         var prepared = draft
         TripRecordSupport.syncRoutePlaces(in: &prepared)
         prepared.name = prepared.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        prepared.originName = prepared.originName.trimmingCharacters(in: .whitespacesAndNewlines)
         prepared.notes = prepared.notes.trimmingCharacters(in: .whitespacesAndNewlines)
 
         prepared.stops = prepared.stops.map { stop in

@@ -365,39 +365,58 @@ enum TripRecordSupport {
         min(draft.legs.count, draft.stops.count)
     }
 
+    static func originName(in draft: TripRecordDraft) -> String {
+        let origin = draft.originName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !origin.isEmpty { return origin }
+        guard let from = draft.legs.first?.fromName.trimmingCharacters(in: .whitespacesAndNewlines),
+              !from.isEmpty else {
+            return ""
+        }
+        return from
+    }
+
     static func lastPlace(in draft: TripRecordDraft) -> String {
-        let pairs = destinationCount(in: draft)
-        if pairs > 0 {
-            let stay = draft.stops[pairs - 1].locationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if draft.stops.count > draft.legs.count {
+            let stay = draft.stops.last?.locationName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if !stay.isEmpty { return stay }
-            let to = draft.legs[pairs - 1].toName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !to.isEmpty { return to }
         }
         if let to = draft.legs.last?.toName.trimmingCharacters(in: .whitespacesAndNewlines), !to.isEmpty {
             return to
         }
-        if let origin = draft.legs.first?.fromName.trimmingCharacters(in: .whitespacesAndNewlines), !origin.isEmpty {
-            return origin
+        if let stay = draft.stops.last?.locationName.trimmingCharacters(in: .whitespacesAndNewlines), !stay.isEmpty {
+            return stay
         }
-        return ""
+        return originName(in: draft)
     }
 
     static func syncRoutePlaces(in draft: inout TripRecordDraft) {
-        let pairs = destinationCount(in: draft)
+        if !draft.legs.isEmpty {
+            let origin = draft.originName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let firstFrom = draft.legs[0].fromName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if firstFrom.isEmpty, !origin.isEmpty {
+                draft.legs[0].fromName = draft.originName
+            } else if !firstFrom.isEmpty {
+                draft.originName = draft.legs[0].fromName
+            }
+        }
+
+        let pairs = min(draft.legs.count, draft.stops.count)
         for index in 0..<pairs {
             let to = draft.legs[index].toName.trimmingCharacters(in: .whitespacesAndNewlines)
             let stay = draft.stops[index].locationName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !to.isEmpty {
-                draft.stops[index].locationName = draft.legs[index].toName
-            } else if !stay.isEmpty {
+            if to.isEmpty, !stay.isEmpty {
                 draft.legs[index].toName = draft.stops[index].locationName
+            } else if stay.isEmpty, !to.isEmpty {
+                draft.stops[index].locationName = draft.legs[index].toName
             }
         }
+
         if draft.legs.count > 1 {
             for index in 1..<draft.legs.count {
                 let previous: String
-                if index <= pairs {
-                    previous = draft.stops[index - 1].locationName
+                if index - 1 < draft.stops.count {
+                    let stay = draft.stops[index - 1].locationName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    previous = stay.isEmpty ? draft.legs[index - 1].toName : draft.stops[index - 1].locationName
                 } else {
                     previous = draft.legs[index - 1].toName
                 }
@@ -408,9 +427,9 @@ enum TripRecordSupport {
         }
     }
 
-    static func suggestedTravelDate(in draft: TripRecordDraft, insertAt: Int) -> Date {
-        if insertAt > 0, insertAt - 1 < draft.stops.count {
-            return draft.stops[insertAt - 1].departedAt
+    static func suggestedTravelDate(in draft: TripRecordDraft) -> Date {
+        if draft.stops.count >= draft.legs.count, let lastStay = draft.stops.last {
+            return lastStay.departedAt
         }
         if let last = draft.legs.last {
             return last.travelledOn
@@ -418,23 +437,31 @@ enum TripRecordSupport {
         return draft.startDate
     }
 
-    static func appendDestination(to draft: inout TripRecordDraft) {
-        let insertAt = destinationCount(in: draft)
-        let from = lastPlace(in: draft)
-        let travelDate = suggestedTravelDate(in: draft, insertAt: insertAt)
+    static func appendStay(to draft: inout TripRecordDraft) {
+        let insertAt = draft.stops.count
+        let travelDate: Date
+        if insertAt > 0 {
+            travelDate = draft.stops[insertAt - 1].departedAt
+        } else if insertAt < draft.legs.count {
+            travelDate = draft.legs[insertAt].travelledOn
+        } else {
+            travelDate = draft.startDate
+        }
         var stay = TripStopDraft.blank(startDate: travelDate, endDate: insertAt == 0 ? draft.endDate : travelDate)
         if insertAt > 0 {
             let previous = draft.stops[insertAt - 1]
             stay.arrivedAt = previous.departedAt
             stay.departedAt = previous.departedAt
         }
-        draft.legs.insert(TripLegDraft(fromName: from, travelledOn: travelDate), at: insertAt)
-        draft.stops.insert(stay, at: insertAt)
+        if insertAt < draft.legs.count {
+            stay.locationName = draft.legs[insertAt].toName
+        }
+        draft.stops.append(stay)
         syncRoutePlaces(in: &draft)
     }
 
     static func appendJourney(to draft: inout TripRecordDraft) {
-        let travelDate = suggestedTravelDate(in: draft, insertAt: destinationCount(in: draft))
+        let travelDate = suggestedTravelDate(in: draft)
         draft.legs.append(TripLegDraft(fromName: lastPlace(in: draft), travelledOn: travelDate))
         syncRoutePlaces(in: &draft)
     }
@@ -500,30 +527,15 @@ enum TripRecordSupport {
         items.insert(item, at: max(insertAt, 0))
     }
 
-    static func deleteDestination(in draft: inout TripRecordDraft, at index: Int) {
-        let pairs = destinationCount(in: draft)
-        guard index >= 0, index < pairs else { return }
-        draft.legs.remove(at: index)
-        draft.stops.remove(at: index)
-        syncRoutePlaces(in: &draft)
-    }
-
     static func deleteJourney(in draft: inout TripRecordDraft, id: UUID) {
         guard let index = draft.legs.firstIndex(where: { $0.id == id }) else { return }
-        if index < destinationCount(in: draft) {
-            deleteDestination(in: &draft, at: index)
-        } else {
-            draft.legs.remove(at: index)
-            syncRoutePlaces(in: &draft)
-        }
+        draft.legs.remove(at: index)
+        syncRoutePlaces(in: &draft)
     }
 
     static func deleteStay(in draft: inout TripRecordDraft, id: UUID) {
         guard let index = draft.stops.firstIndex(where: { $0.id == id }) else { return }
-        if index < destinationCount(in: draft) {
-            deleteDestination(in: &draft, at: index)
-        } else {
-            draft.stops.remove(at: index)
-        }
+        draft.stops.remove(at: index)
+        syncRoutePlaces(in: &draft)
     }
 }

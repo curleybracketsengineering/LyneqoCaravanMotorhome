@@ -87,6 +87,21 @@ struct TripRecordEditorView: View {
             TextField("Name", text: $draft.name)
                 .textInputAutocapitalization(.words)
 
+            TextField(
+                "Starting from",
+                text: Binding(
+                    get: { draft.originName },
+                    set: { newValue in
+                        draft.originName = newValue
+                        if !draft.legs.isEmpty {
+                            draft.legs[0].fromName = newValue
+                        }
+                        TripRecordSupport.syncRoutePlaces(in: &draft)
+                    }
+                )
+            )
+            .textInputAutocapitalization(.words)
+
             DatePicker("Start", selection: $draft.startDate, displayedComponents: .date)
             DatePicker("Finish", selection: $draft.endDate, displayedComponents: .date)
 
@@ -120,20 +135,20 @@ struct TripRecordEditorView: View {
             }
 
             Button {
-                TripRecordSupport.appendDestination(to: &draft)
-            } label: {
-                Label("Add destination", systemImage: "plus.circle")
-            }
-
-            Button {
                 TripRecordSupport.appendJourney(to: &draft)
             } label: {
                 Label("Add journey", systemImage: "arrow.right.circle")
             }
+
+            Button {
+                TripRecordSupport.appendStay(to: &draft)
+            } label: {
+                Label("Add stay", systemImage: "plus.circle")
+            }
         } header: {
             Text("Route")
         } footer: {
-            Text("Add a destination to travel there and stay. Add a journey for a hop with no stay, such as going back. Mileage and journey time are optional. Journey time can be hours:minutes (2:30) or hours (2.5). Leave a field blank if you have not recorded it yet. Zero means you entered 0.")
+            Text("The trip can be just the overall holiday journey. Add a stay only if you want to record a site. Add another journey for a later hop or the run back. Mileage and journey time are optional. Journey time can be hours:minutes (2:30) or hours (2.5). Leave a field blank if you have not recorded it yet. Zero means you entered 0.")
         }
     }
 
@@ -158,6 +173,7 @@ struct TripRecordEditorView: View {
 
     private func journeyEditor(index: Int, number: Int) -> some View {
         let isPaired = index < TripRecordSupport.destinationCount(in: draft)
+        let from = draft.legs[index].fromName.trimmingCharacters(in: .whitespacesAndNewlines)
         return VStack(alignment: .leading, spacing: AppScreenMetrics.smallSpacing) {
             HStack(spacing: AppScreenMetrics.controlSpacing) {
                 Text("Journey \(number)")
@@ -169,32 +185,24 @@ struct TripRecordEditorView: View {
                         TripRecordSupport.moveDestination(in: &draft, from: from, to: to)
                     }
                 }
-                routeDeleteButton(
-                    accessibilityLabel: isPaired ? "Delete destination \(number)" : "Delete journey \(number)"
-                ) {
+                routeDeleteButton(accessibilityLabel: "Delete journey \(number)") {
                     TripRecordSupport.deleteJourney(in: &draft, id: draft.legs[index].id)
                 }
             }
             .buttonStyle(.borderless)
 
             HStack(alignment: .bottom, spacing: AppScreenMetrics.controlSpacing) {
-                if index == 0 {
-                    compactRouteField("From", text: $draft.legs[index].fromName)
-                        .textInputAutocapitalization(.words)
-                } else {
-                    let from = draft.legs[index].fromName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    VStack(alignment: .leading, spacing: AppScreenMetrics.tinySpacing) {
-                        Text("From")
-                            .font(.caption)
-                            .foregroundStyle(AppColors.textSupporting)
-                        Text(from.isEmpty ? "—" : from)
-                            .font(.body)
-                            .foregroundStyle(from.isEmpty ? AppColors.textSupporting : Color.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 2)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: AppScreenMetrics.tinySpacing) {
+                    Text("From")
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSupporting)
+                    Text(from.isEmpty ? "—" : from)
+                        .font(.body)
+                        .foregroundStyle(from.isEmpty ? AppColors.textSupporting : Color.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 Image(systemName: "arrow.right")
                     .font(.caption.weight(.semibold))
@@ -234,7 +242,6 @@ struct TripRecordEditorView: View {
     }
 
     private func stayEditor(index: Int, number: Int) -> some View {
-        let isPaired = index < TripRecordSupport.destinationCount(in: draft)
         let slot = TripRecordSupport.moveSlot(forStayIndex: index, in: draft)
         return VStack(alignment: .leading, spacing: AppScreenMetrics.smallSpacing) {
             HStack(spacing: AppScreenMetrics.controlSpacing) {
@@ -250,9 +257,7 @@ struct TripRecordEditorView: View {
                         }
                     }
                 }
-                routeDeleteButton(
-                    accessibilityLabel: isPaired ? "Delete destination \(number)" : "Delete stay \(number)"
-                ) {
+                routeDeleteButton(accessibilityLabel: "Delete stay \(number)") {
                     TripRecordSupport.deleteStay(in: &draft, id: draft.stops[index].id)
                 }
             }
@@ -265,9 +270,6 @@ struct TripRecordEditorView: View {
                     set: { newValue in
                         guard index < draft.stops.count else { return }
                         draft.stops[index].locationName = newValue
-                        if index < draft.legs.count {
-                            draft.legs[index].toName = newValue
-                        }
                         TripRecordSupport.syncRoutePlaces(in: &draft)
                     }
                 )

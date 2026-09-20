@@ -134,13 +134,11 @@ struct SafetyView: View {
                 }
             }
             .sheet(isPresented: $showAddTrip, onDismiss: { newTripName = "" }) {
-                AddTripSheet(name: $newTripName) {
-                    guard let profile = activeProfile else { return }
-                    let trimmed = newTripName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !trimmed.isEmpty else { return }
-                    _ = TripStore.addTrip(name: trimmed, to: profile, in: modelContext)
-                    newTripName = ""
-                    showAddTrip = false
+                if let profile = activeProfile {
+                    AddTripSheet(profile: profile, name: $newTripName) {
+                        newTripName = ""
+                        showAddTrip = false
+                    }
                 }
             }
             .alert("Rename Loading Configuration", isPresented: Binding(

@@ -125,9 +125,22 @@ struct TripPickerBar: View {
 
 struct AddTripSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
 
+    let profile: VehicleProfile
     @Binding var name: String
-    let onAdd: () -> Void
+    var onCreated: () -> Void = {}
+
+    @Query private var allLoadedItems: [LoadedItem]
+    @State private var copyFromTripID: UUID?
+
+    private var previousTrips: [Trip] {
+        TripStore.sortedTrips(for: profile)
+    }
+
+    private var selectedSource: Trip? {
+        previousTrips.first { $0.id == copyFromTripID }
+    }
 
     var body: some View {
         NavigationStack {
@@ -139,8 +152,12 @@ struct AddTripSheet: View {
                         text: $name
                     )
 
+                    if !previousTrips.isEmpty {
+                        copyFromPreviousSection
+                    }
+
                     AppPrimaryButton("Create Loading Configuration") {
-                        onAdd()
+                        createConfiguration()
                     }
                     .padding(.top, AppScreenMetrics.tinySpacing)
                 }
@@ -166,7 +183,76 @@ struct AddTripSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private var copyFromPreviousSection: some View {
+        AppSettingsSection(
+            "Copy items from previous loading",
+            caption: "Choose Default from previous loadings to copy every item, quantity, and location into this new configuration."
+        ) {
+            VStack(alignment: .leading, spacing: AppScreenMetrics.controlSpacing) {
+                copySourceRow(title: "Don't copy", subtitle: "Start with an empty load list.", tripID: nil)
+
+                ForEach(previousTrips) { trip in
+                    copySourceRow(
+                        title: TripStore.copyForwardPickerTitle(for: trip),
+                        subtitle: copySourceSubtitle(for: trip),
+                        tripID: trip.id
+                    )
+                }
+            }
+        }
+    }
+
+    private func copySourceRow(title: String, subtitle: String, tripID: UUID?) -> some View {
+        let isSelected = copyFromTripID == tripID
+        return Button {
+            copyFromTripID = tripID
+        } label: {
+            HStack(alignment: .top, spacing: AppScreenMetrics.controlSpacing) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(AppColors.textSupporting)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: AppScreenMetrics.smallSpacing)
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            }
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func copySourceSubtitle(for trip: Trip) -> String {
+        let count = TripStore.loadedItems(for: trip, from: allLoadedItems)
+            .filter { $0.quantity > 0 && $0.item != nil }
+            .count
+        if count == 0 {
+            return "No items to copy."
+        }
+        return count == 1 ? "Copies 1 item." : "Copies \(count) items."
+    }
+
+    private func createConfiguration() {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = TripStore.addTrip(
+            name: trimmed,
+            to: profile,
+            copyLoadedItemsFrom: selectedSource,
+            in: modelContext
+        )
+        onCreated()
+        dismiss()
     }
 }

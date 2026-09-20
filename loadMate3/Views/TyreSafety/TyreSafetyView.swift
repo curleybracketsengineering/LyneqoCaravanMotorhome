@@ -675,6 +675,7 @@ private struct TyreDetailView: View {
 
     let record: TyreRecord
     let siblingRecords: [TyreRecord]
+    private let originalSnapshot: TyreDetailEditorSnapshot
 
     @State private var manufacturer: String
     @State private var modelName: String
@@ -697,6 +698,7 @@ private struct TyreDetailView: View {
     @State private var isAnalyzingSidewall = false
     @State private var sidewallSuggestions: TyreSidewallSuggestions?
     @State private var sidewallAnalysisError: String?
+    @State private var persistTask: Task<Void, Never>?
 
     init(record: TyreRecord, siblingRecords: [TyreRecord]) {
         self.record = record
@@ -716,6 +718,21 @@ private struct TyreDetailView: View {
         _removedDate = State(initialValue: record.removedDate ?? Date())
         _isCurrentlyFitted = State(initialValue: record.isCurrentlyFitted)
         _previewManufactureDate = State(initialValue: record.manufactureDate)
+        originalSnapshot = TyreDetailEditorSnapshot(
+            manufacturer: record.manufacturer,
+            modelName: record.modelName,
+            tyreSize: record.tyreSize,
+            loadIndex: record.loadIndex,
+            speedRating: record.speedRating,
+            dateCode: record.dateCode,
+            recommendedPressure: record.recommendedPressurePSI.map { Self.displayPressure($0, unit: unit) } ?? "",
+            latestPressure: record.latestPressurePSI.map { Self.displayPressure($0, unit: unit) } ?? "",
+            latestPressureDate: record.latestPressureDate ?? Date(),
+            notes: record.notes,
+            installedDate: record.installedDate ?? Date(),
+            removedDate: record.removedDate ?? Date(),
+            isCurrentlyFitted: record.isCurrentlyFitted
+        )
     }
 
     private var canCopyFromSibling: Bool {
@@ -731,6 +748,28 @@ private struct TyreDetailView: View {
 
     private var pressureUnit: PressureUnit {
         PressureUnit(rawValue: pressureUnitRaw) ?? .psi
+    }
+
+    private var editorSnapshot: TyreDetailEditorSnapshot {
+        TyreDetailEditorSnapshot(
+            manufacturer: manufacturer,
+            modelName: modelName,
+            tyreSize: tyreSize,
+            loadIndex: loadIndex,
+            speedRating: speedRating,
+            dateCode: dateCode,
+            recommendedPressure: recommendedPressure,
+            latestPressure: latestPressure,
+            latestPressureDate: latestPressureDate,
+            notes: notes,
+            installedDate: installedDate,
+            removedDate: removedDate,
+            isCurrentlyFitted: isCurrentlyFitted
+        )
+    }
+
+    private var hasUnsavedDetailEdits: Bool {
+        editorSnapshot != originalSnapshot
     }
 
     var body: some View {
@@ -810,7 +849,7 @@ private struct TyreDetailView: View {
 
                     VStack(spacing: AppScreenMetrics.controlSpacing) {
                         AppPrimaryButton("Save tyre details", systemImage: "checkmark.circle.fill") {
-                            save()
+                            saveAndDismiss()
                         }
                         if canCopyFromSibling {
                             AppSecondaryButton("Copy from another tyre") { showCopyFrom = true }
@@ -828,8 +867,18 @@ private struct TyreDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Close") {
+                        flushPersist()
+                        dismiss()
+                    }
                 }
+            }
+            .interactiveDismissDisabled()
+            .onChange(of: editorSnapshot) { _, _ in
+                schedulePersist()
+            }
+            .onDisappear {
+                flushPersist()
             }
             .sheet(isPresented: $showHistory) {
                 TyreRecordHistoryView(
@@ -871,10 +920,12 @@ private struct TyreDetailView: View {
             }
             .alert("Replace tyre", isPresented: $showReplaceConfirm) {
                 Button("Copy manufacturer and model") {
+                    flushPersist()
                     _ = TyreStore.replaceTyre(record, copyManufacturerAndModel: true, in: modelContext)
                     dismiss()
                 }
                 Button("Do not copy manufacturer or model") {
+                    flushPersist()
                     _ = TyreStore.replaceTyre(record, copyManufacturerAndModel: false, in: modelContext)
                     dismiss()
                 }
@@ -885,46 +936,61 @@ private struct TyreDetailView: View {
         }
     }
 
-    private func save() {
-        dateCodeError = nil
-        let trimmedDateCode = dateCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedDateCode.isEmpty {
-            guard let parsed = TyreSupport.parseDateCode(trimmedDateCode) else {
-                dateCodeError = "Enter a valid four-digit week and year code that is not in the future."
-                return
-            }
-            record.dateCode = parsed.normalized
-            record.manufactureWeek = parsed.week
-            record.manufactureYear = parsed.year
-            record.manufactureDate = parsed.manufactureDate
-        } else {
-            record.dateCode = ""
-            record.manufactureWeek = nil
-            record.manufactureYear = nil
-            record.manufactureDate = nil
+    private func saveAndDismiss() {
+        persistTask?.cancel()
+        persistTask = nil
+        let result = persistDetails(requireValidDateCode: true)
+        if result != .blockedByInvalidDateCode {
+            dismiss()
         }
-
-        record.manufacturer = manufacturer.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.modelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.tyreSize = tyreSize.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.loadIndex = loadIndex.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.speedRating = speedRating.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.recommendedPressurePSI = parsePressure(recommendedPressure)
-        record.latestPressurePSI = parsePressure(latestPressure)
-        record.latestPressureDate = record.latestPressurePSI == nil ? nil : latestPressureDate
-        record.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        record.installedDate = installedDate
-        record.removedDate = isCurrentlyFitted ? nil : removedDate
-        record.isCurrentlyFitted = isCurrentlyFitted
-        record.updatedAt = Date()
-
-        try? modelContext.save()
-        dismiss()
     }
 
-    private func parsePressure(_ input: String) -> Double? {
-        guard let displayValue = Double(input) else { return nil }
-        return TyreSupport.convertPressure(displayValue, from: pressureUnit, to: .psi)
+    private func schedulePersist() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            persistDetails(requireValidDateCode: false)
+        }
+    }
+
+    private func flushPersist() {
+        persistTask?.cancel()
+        persistTask = nil
+        persistDetails(requireValidDateCode: false)
+    }
+
+    @discardableResult
+    private func persistDetails(requireValidDateCode: Bool) -> TyreDetailsApplyResult {
+        if !requireValidDateCode, !hasUnsavedDetailEdits {
+            return .saved
+        }
+        if requireValidDateCode {
+            dateCodeError = nil
+        }
+        let result = TyreStore.applyEditorDetails(
+            to: record,
+            manufacturer: manufacturer,
+            modelName: modelName,
+            tyreSize: tyreSize,
+            loadIndex: loadIndex,
+            speedRating: speedRating,
+            dateCode: dateCode,
+            recommendedPressureDisplay: recommendedPressure,
+            latestPressureDisplay: latestPressure,
+            latestPressureDate: latestPressureDate,
+            notes: notes,
+            installedDate: installedDate,
+            removedDate: removedDate,
+            isCurrentlyFitted: isCurrentlyFitted,
+            pressureUnit: pressureUnit,
+            requireValidDateCode: requireValidDateCode,
+            in: modelContext
+        )
+        if result == .blockedByInvalidDateCode {
+            dateCodeError = "Enter a valid four-digit week and year code that is not in the future."
+        }
+        return result
     }
 
     private func analyzeSidewallPhoto(_ photo: TyrePhoto) {
@@ -1050,6 +1116,39 @@ private struct TyreDetailView: View {
     }
 }
 
+private struct TyreDetailEditorSnapshot: Equatable {
+    var manufacturer: String
+    var modelName: String
+    var tyreSize: String
+    var loadIndex: String
+    var speedRating: String
+    var dateCode: String
+    var recommendedPressure: String
+    var latestPressure: String
+    var latestPressureDate: Date
+    var notes: String
+    var installedDate: Date
+    var removedDate: Date
+    var isCurrentlyFitted: Bool
+}
+
+private struct TyreInspectionEditorSnapshot: Equatable {
+    var inspectionDate: Date
+    var pressure: String
+    var treadDepth: String
+    var hasCuts: Bool
+    var hasBulges: Bool
+    var hasCracking: Bool
+    var hasUnevenWear: Bool
+    var hasEmbeddedObjects: Bool
+    var valveAppearsSound: Bool
+    var wheelNutsChecked: Bool
+    var overallCondition: TyreCondition
+    var notes: String
+    var pendingPhotoCount: Int
+    var pendingPhotoKinds: [TyrePhotoKind]
+}
+
 struct TyreInspectionView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
@@ -1072,6 +1171,27 @@ struct TyreInspectionView: View {
     @State private var notes = ""
     @State private var pendingPhotos: [(UIImage, TyrePhotoKind)] = []
     @State private var didAutoEscalateCondition = false
+    @State private var persistTask: Task<Void, Never>?
+    @State private var didCommitInspection = false
+
+    init(record: TyreRecord, profile: VehicleProfile) {
+        self.record = record
+        self.profile = profile
+        guard let draft = TyreInspectionDraftStore.load(for: record.id) else { return }
+        _inspectionDate = State(initialValue: draft.inspectionDate)
+        _pressure = State(initialValue: draft.pressure)
+        _treadDepth = State(initialValue: draft.treadDepth)
+        _hasCuts = State(initialValue: draft.hasCuts)
+        _hasBulges = State(initialValue: draft.hasBulges)
+        _hasCracking = State(initialValue: draft.hasCracking)
+        _hasUnevenWear = State(initialValue: draft.hasUnevenWear)
+        _hasEmbeddedObjects = State(initialValue: draft.hasEmbeddedObjects)
+        _valveAppearsSound = State(initialValue: draft.valveAppearsSound)
+        _wheelNutsChecked = State(initialValue: draft.wheelNutsChecked)
+        _overallCondition = State(initialValue: draft.overallCondition)
+        _notes = State(initialValue: draft.notes)
+        _pendingPhotos = State(initialValue: TyreInspectionDraftStore.loadPhotos(for: record.id, from: draft))
+    }
 
     private var pressureUnit: PressureUnit {
         PressureUnit(rawValue: pressureUnitRaw) ?? .psi
@@ -1097,6 +1217,25 @@ struct TyreInspectionView: View {
             valveAppearsSound: valveAppearsSound,
             wheelNutsChecked: wheelNutsChecked,
             overallCondition: overallCondition
+        )
+    }
+
+    private var inspectionSnapshot: TyreInspectionEditorSnapshot {
+        TyreInspectionEditorSnapshot(
+            inspectionDate: inspectionDate,
+            pressure: pressure,
+            treadDepth: treadDepth,
+            hasCuts: hasCuts,
+            hasBulges: hasBulges,
+            hasCracking: hasCracking,
+            hasUnevenWear: hasUnevenWear,
+            hasEmbeddedObjects: hasEmbeddedObjects,
+            valveAppearsSound: valveAppearsSound,
+            wheelNutsChecked: wheelNutsChecked,
+            overallCondition: overallCondition,
+            notes: notes,
+            pendingPhotoCount: pendingPhotos.count,
+            pendingPhotoKinds: pendingPhotos.map(\.1)
         )
     }
 
@@ -1150,6 +1289,9 @@ struct TyreInspectionView: View {
                     }
 
                     AppPrimaryButton("Save inspection", systemImage: "checkmark.circle.fill") {
+                        persistTask?.cancel()
+                        persistTask = nil
+                        didCommitInspection = true
                         let inspection = TyreStore.addInspection(
                             to: record,
                             inspectionDate: inspectionDate,
@@ -1173,6 +1315,7 @@ struct TyreInspectionView: View {
                             inspection: inspection,
                             in: modelContext
                         )
+                        TyreInspectionDraftStore.clear(for: record.id)
                         dismiss()
                     }
                 }
@@ -1186,8 +1329,18 @@ struct TyreInspectionView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button("Close") {
+                        flushInspectionDraft()
+                        dismiss()
+                    }
                 }
+            }
+            .interactiveDismissDisabled()
+            .onChange(of: inspectionSnapshot) { _, _ in
+                scheduleInspectionDraftPersist()
+            }
+            .onDisappear {
+                flushInspectionDraft()
             }
             .onChange(of: hasSeriousDefectDraft) { _, hasDefect in
                 syncConditionWithDefects(hasDefect: hasDefect)
@@ -1261,6 +1414,44 @@ struct TyreInspectionView: View {
     private func parsePressure(_ input: String) -> Double? {
         guard let displayValue = Double(input) else { return nil }
         return TyreSupport.convertPressure(displayValue, from: pressureUnit, to: .psi)
+    }
+
+    private func scheduleInspectionDraftPersist() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            persistInspectionDraft()
+        }
+    }
+
+    private func flushInspectionDraft() {
+        persistTask?.cancel()
+        persistTask = nil
+        persistInspectionDraft()
+    }
+
+    private func persistInspectionDraft() {
+        guard !didCommitInspection else { return }
+        TyreInspectionDraftStore.save(
+            TyreInspectionDraft(
+                inspectionDate: inspectionDate,
+                pressure: pressure,
+                treadDepth: treadDepth,
+                hasCuts: hasCuts,
+                hasBulges: hasBulges,
+                hasCracking: hasCracking,
+                hasUnevenWear: hasUnevenWear,
+                hasEmbeddedObjects: hasEmbeddedObjects,
+                valveAppearsSound: valveAppearsSound,
+                wheelNutsChecked: wheelNutsChecked,
+                overallConditionRaw: overallCondition.rawValue,
+                notes: notes,
+                photos: []
+            ),
+            images: pendingPhotos,
+            for: record.id
+        )
     }
 }
 

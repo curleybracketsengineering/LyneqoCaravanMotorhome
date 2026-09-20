@@ -95,6 +95,22 @@ final class TripRecordTests: XCTestCase {
         XCTAssertEqual(reopened.stopsList.map(\.sortOrder), [0, 1, 2])
     }
 
+    func testJourneyOnlyTripPersistsWithoutStay() throws {
+        let profile = insertProfile()
+        var draft = TripRecordDraft.blank(vehicleProfileID: profile.id, currencyCode: "GBP")
+        draft.name = "Spain"
+        draft.originName = "Home"
+        draft.legs = [TripLegDraft(fromName: "Home", toName: "Spain", mileageText: "1200")]
+        XCTAssertTrue(TripRecordDraft.validate(draft).isEmpty)
+
+        let saved = try TripRecordStore.save(draft, in: context)
+        let reopened = try refetchRecord(id: saved.id)
+        XCTAssertEqual(reopened.stopsList.count, 0)
+        XCTAssertEqual(reopened.legsList.count, 1)
+        XCTAssertEqual(reopened.legsList.first?.fromName, "Home")
+        XCTAssertEqual(reopened.legsList.first?.toName, "Spain")
+    }
+
     func testLegOrderingAfterRelaunch() throws {
         let profile = insertProfile()
         var draft = TripRecordDraft.blank(vehicleProfileID: profile.id, currencyCode: "GBP")
@@ -197,6 +213,12 @@ final class TripRecordTests: XCTestCase {
         draft.name = "   "
         XCTAssertTrue(TripRecordDraft.validate(draft).contains(.blankName))
 
+        draft.name = "Spain"
+        draft.legs = [TripLegDraft(toName: "Spain")]
+        XCTAssertTrue(TripRecordDraft.validate(draft).contains(.blankOrigin))
+
+        draft.originName = "Home"
+        draft.legs = []
         draft.name = "Dates"
         draft.startDate = date(2026, 6, 10)
         draft.endDate = date(2026, 6, 1)
@@ -369,75 +391,99 @@ final class TripRecordTests: XCTestCase {
         }
     }
 
-    func testRouteAddsDestinationThenJourneyHome() {
+    func testRouteAddsJourneyWithoutStayThenOptionalStayAndReturn() {
         var draft = TripRecordDraft.blank(vehicleProfileID: UUID(), currencyCode: "GBP")
         draft.startDate = date(2026, 8, 1)
         draft.endDate = date(2026, 8, 10)
+        draft.originName = "Storage"
 
-        TripRecordSupport.appendDestination(to: &draft)
+        TripRecordSupport.appendJourney(to: &draft)
         XCTAssertEqual(draft.legs.count, 1)
-        XCTAssertEqual(draft.stops.count, 1)
+        XCTAssertEqual(draft.stops.count, 0)
+        XCTAssertEqual(draft.legs[0].fromName, "Storage")
         XCTAssertEqual(
             Calendar.current.startOfDay(for: draft.legs[0].travelledOn),
             Calendar.current.startOfDay(for: date(2026, 8, 1))
         )
-        draft.legs[0].fromName = "Storage"
         draft.legs[0].toName = "Longleat"
         TripRecordSupport.syncRoutePlaces(in: &draft)
-        XCTAssertEqual(draft.stops[0].locationName, "Longleat")
 
-        TripRecordSupport.appendDestination(to: &draft)
-        XCTAssertEqual(draft.legs[1].fromName, "Longleat")
-        draft.legs[1].toName = "Bath"
-        TripRecordSupport.syncRoutePlaces(in: &draft)
-        XCTAssertEqual(draft.stops[1].locationName, "Bath")
-        XCTAssertEqual(draft.stops[1].arrivedAt, draft.stops[0].departedAt)
+        TripRecordSupport.appendStay(to: &draft)
+        XCTAssertEqual(draft.stops.count, 1)
+        XCTAssertEqual(draft.stops[0].locationName, "Longleat")
 
         TripRecordSupport.appendJourney(to: &draft)
         XCTAssertEqual(
-            Calendar.current.startOfDay(for: draft.legs[2].travelledOn),
-            Calendar.current.startOfDay(for: draft.stops[1].departedAt)
+            Calendar.current.startOfDay(for: draft.legs[1].travelledOn),
+            Calendar.current.startOfDay(for: draft.stops[0].departedAt)
         )
-        XCTAssertEqual(draft.legs.count, 3)
-        XCTAssertEqual(draft.stops.count, 2)
-        XCTAssertEqual(draft.legs[2].fromName, "Bath")
-        draft.legs[2].toName = "Storage"
+        XCTAssertEqual(draft.legs.count, 2)
+        XCTAssertEqual(draft.stops.count, 1)
+        XCTAssertEqual(draft.legs[1].fromName, "Longleat")
+        draft.legs[1].toName = "Storage"
         TripRecordSupport.syncRoutePlaces(in: &draft)
 
         XCTAssertEqual(draft.legs.map { "\($0.fromName)|\($0.toName)" }, [
             "Storage|Longleat",
-            "Longleat|Bath",
-            "Bath|Storage"
+            "Longleat|Storage"
         ])
-        XCTAssertEqual(draft.stops.map(\.locationName), ["Longleat", "Bath"])
+        XCTAssertEqual(draft.stops.map(\.locationName), ["Longleat"])
     }
 
-    func testAppendDestinationInsertsBeforeTrailingJourney() {
+    func testDeleteStayLeavesJourneyInPlace() {
         var draft = TripRecordDraft.blank(vehicleProfileID: UUID(), currencyCode: "GBP")
-        TripRecordSupport.appendDestination(to: &draft)
-        draft.legs[0].fromName = "Storage"
+        draft.name = "York weekend"
+        draft.originName = "Home"
+        TripRecordSupport.appendJourney(to: &draft)
+        draft.legs[0].toName = "York"
+        TripRecordSupport.syncRoutePlaces(in: &draft)
+        TripRecordSupport.appendStay(to: &draft)
+
+        XCTAssertEqual(draft.legs.count, 1)
+        XCTAssertEqual(draft.stops.count, 1)
+
+        TripRecordSupport.deleteStay(in: &draft, id: draft.stops[0].id)
+
+        XCTAssertEqual(draft.legs.count, 1)
+        XCTAssertEqual(draft.stops.count, 0)
+        XCTAssertEqual(draft.legs[0].fromName, "Home")
+        XCTAssertEqual(draft.legs[0].toName, "York")
+        XCTAssertTrue(TripRecordDraft.validate(draft).isEmpty)
+    }
+
+    func testAppendStayAfterReturnJourneyStillFollowsFirstJourney() {
+        var draft = TripRecordDraft.blank(vehicleProfileID: UUID(), currencyCode: "GBP")
+        draft.originName = "Storage"
+        TripRecordSupport.appendJourney(to: &draft)
         draft.legs[0].toName = "York"
         TripRecordSupport.syncRoutePlaces(in: &draft)
         TripRecordSupport.appendJourney(to: &draft)
         draft.legs[1].toName = "Storage"
         TripRecordSupport.syncRoutePlaces(in: &draft)
 
-        TripRecordSupport.appendDestination(to: &draft)
-        XCTAssertEqual(draft.legs.count, 3)
-        XCTAssertEqual(draft.stops.count, 2)
-        XCTAssertEqual(draft.legs[1].fromName, "York")
-        XCTAssertEqual(draft.legs[2].toName, "Storage")
+        TripRecordSupport.appendStay(to: &draft)
+        XCTAssertEqual(draft.legs.count, 2)
+        XCTAssertEqual(draft.stops.count, 1)
+        XCTAssertEqual(draft.stops[0].locationName, "York")
+        XCTAssertEqual(
+            TripRecordSupport.routeCards(from: draft).map(\.id).map { id in
+                id.hasPrefix("journey") ? "journey" : "stay"
+            },
+            ["journey", "stay", "journey"]
+        )
     }
 
     func testMoveRouteReordersDestinationPairsTogether() {
         var draft = TripRecordDraft.blank(vehicleProfileID: UUID(), currencyCode: "GBP")
-        TripRecordSupport.appendDestination(to: &draft)
-        draft.legs[0].fromName = "Home"
+        draft.originName = "Home"
+        TripRecordSupport.appendJourney(to: &draft)
         draft.legs[0].toName = "York"
         TripRecordSupport.syncRoutePlaces(in: &draft)
-        TripRecordSupport.appendDestination(to: &draft)
+        TripRecordSupport.appendStay(to: &draft)
+        TripRecordSupport.appendJourney(to: &draft)
         draft.legs[1].toName = "Bath"
         TripRecordSupport.syncRoutePlaces(in: &draft)
+        TripRecordSupport.appendStay(to: &draft)
 
         TripRecordSupport.moveRoute(
             in: &draft,
@@ -446,6 +492,22 @@ final class TripRecordTests: XCTestCase {
         )
         XCTAssertEqual(draft.stops.map(\.locationName), ["Bath", "York"])
         XCTAssertEqual(draft.legs.map(\.toName), ["Bath", "York"])
+    }
+
+    func testSyncRoutePlacesKeepsReorderedFirstJourneyAsOrigin() {
+        var draft = TripRecordDraft.blank(vehicleProfileID: UUID(), currencyCode: "GBP")
+        draft.originName = "Home"
+        draft.legs = [
+            TripLegDraft(fromName: "Home", toName: "Cambridge"),
+            TripLegDraft(fromName: "Cambridge", toName: "York")
+        ]
+        TripRecordSupport.syncRoutePlaces(in: &draft)
+        draft.legs.move(fromOffsets: IndexSet(integer: 0), toOffset: 2)
+        TripRecordSupport.syncRoutePlaces(in: &draft)
+
+        XCTAssertEqual(draft.originName, "Cambridge")
+        XCTAssertEqual(draft.legs.map(\.fromName), ["Cambridge", "York"])
+        XCTAssertEqual(draft.legs.map(\.toName), ["York", "Cambridge"])
     }
 
     func testTravelTimeParsesHoursAndMinutesAndTotals() throws {

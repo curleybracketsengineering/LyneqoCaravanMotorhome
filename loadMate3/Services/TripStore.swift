@@ -67,10 +67,28 @@ enum TripStore {
         }
     }
 
+    /// The vehicle's "Default" loading configuration, if it still uses that name.
+    static func defaultLoadingConfiguration(for profile: VehicleProfile?) -> Trip? {
+        sortedTrips(for: profile).first { trip in
+            trip.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .compare(defaultTripName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+    }
+
+    /// Picker label for copying items from an existing configuration.
+    static func copyForwardPickerTitle(for trip: Trip) -> String {
+        let trimmed = trip.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.compare(defaultTripName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame {
+            return "Default from previous loadings"
+        }
+        return trimmed.isEmpty ? "Untitled" : trimmed
+    }
+
     @MainActor
     static func addTrip(
         name: String,
         to profile: VehicleProfile,
+        copyLoadedItemsFrom source: Trip? = nil,
         in context: ModelContext
     ) -> Trip {
         let nextOrder = (profile.tripsList.map(\.sortOrder).max() ?? -1) + 1
@@ -81,8 +99,39 @@ enum TripStore {
             profile: profile
         )
         context.insert(trip)
+        if let source {
+            copyLoadedItems(from: source, to: trip, in: context)
+        }
         setActive(trip, on: profile, in: context)
         return trip
+    }
+
+    /// Duplicates loaded rows onto another configuration. Library items are shared; quantities and zones are copied.
+    @MainActor
+    static func copyLoadedItems(
+        from source: Trip,
+        to destination: Trip,
+        in context: ModelContext
+    ) {
+        guard source.id != destination.id else { return }
+        let sourceItems = source.loadedItemsList
+            .sorted { lhs, rhs in
+                if lhs.loadedAt != rhs.loadedAt { return lhs.loadedAt < rhs.loadedAt }
+                return lhs.id.uuidString < rhs.id.uuidString
+            }
+
+        for loaded in sourceItems {
+            guard let item = loaded.item, loaded.quantity > 0 else { continue }
+            context.insert(
+                LoadedItem(
+                    item: item,
+                    quantity: loaded.quantity,
+                    zone: loaded.zone,
+                    loadedAt: loaded.loadedAt,
+                    trip: destination
+                )
+            )
+        }
     }
 
     @MainActor

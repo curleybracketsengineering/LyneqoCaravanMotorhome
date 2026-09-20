@@ -197,4 +197,78 @@ enum TyreStore {
         }
         return updated
     }
+
+    /// Writes tyre-detail editor fields onto the record.
+    /// Incomplete or invalid date codes are left unchanged unless `requireValidDateCode` is true.
+    @discardableResult
+    static func applyEditorDetails(
+        to record: TyreRecord,
+        manufacturer: String,
+        modelName: String,
+        tyreSize: String,
+        loadIndex: String,
+        speedRating: String,
+        dateCode: String,
+        recommendedPressureDisplay: String,
+        latestPressureDisplay: String,
+        latestPressureDate: Date,
+        notes: String,
+        installedDate: Date,
+        removedDate: Date,
+        isCurrentlyFitted: Bool,
+        pressureUnit: PressureUnit,
+        requireValidDateCode: Bool,
+        in context: ModelContext
+    ) -> TyreDetailsApplyResult {
+        let trimmedDateCode = dateCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parsedDateCode = trimmedDateCode.isEmpty ? nil : TyreSupport.parseDateCode(trimmedDateCode)
+
+        if !trimmedDateCode.isEmpty, parsedDateCode == nil, requireValidDateCode {
+            return .blockedByInvalidDateCode
+        }
+
+        record.manufacturer = manufacturer.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.modelName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.tyreSize = tyreSize.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.loadIndex = loadIndex.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.speedRating = speedRating.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.recommendedPressurePSI = parsedPressurePSI(recommendedPressureDisplay, unit: pressureUnit)
+        record.latestPressurePSI = parsedPressurePSI(latestPressureDisplay, unit: pressureUnit)
+        record.latestPressureDate = record.latestPressurePSI == nil ? nil : latestPressureDate
+        record.notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.installedDate = installedDate
+        record.removedDate = isCurrentlyFitted ? nil : removedDate
+        record.isCurrentlyFitted = isCurrentlyFitted
+
+        let skippedInvalidDateCode = !trimmedDateCode.isEmpty && parsedDateCode == nil
+        if !skippedInvalidDateCode {
+            if let parsedDateCode {
+                record.dateCode = parsedDateCode.normalized
+                record.manufactureWeek = parsedDateCode.week
+                record.manufactureYear = parsedDateCode.year
+                record.manufactureDate = parsedDateCode.manufactureDate
+            } else {
+                record.dateCode = ""
+                record.manufactureWeek = nil
+                record.manufactureYear = nil
+                record.manufactureDate = nil
+            }
+        }
+
+        record.updatedAt = Date()
+        try? context.save()
+        return skippedInvalidDateCode ? .savedSkippingInvalidDateCode : .saved
+    }
+
+    private static func parsedPressurePSI(_ input: String, unit: PressureUnit) -> Double? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let displayValue = Double(trimmed) else { return nil }
+        return TyreSupport.convertPressure(displayValue, from: unit, to: .psi)
+    }
+}
+
+enum TyreDetailsApplyResult: Equatable {
+    case saved
+    case savedSkippingInvalidDateCode
+    case blockedByInvalidDateCode
 }
