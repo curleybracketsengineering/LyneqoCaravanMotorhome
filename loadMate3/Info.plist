@@ -6,13 +6,5 @@
 	<array>
 		<string>remote-notification</string>
 	</array>
-	<key>NSCameraUsageDescription</key>
-	<string>Lyneqo Caravan &amp; Motorhome uses the camera to photograph vehicle plates, CRiS VIN Chip stickers, tyres, maintenance records, and accident scenes — including other vehicles, number plates, and documents the other driver chooses to show (such as a driving licence or Green Card).</string>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Lyneqo Caravan &amp; Motorhome can attach existing photos to vehicle plates, CRiS VIN Chip stickers, tyre, maintenance and accident records, including documents shown after an accident.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Lyneqo Caravan &amp; Motorhome can record your approximate location if you choose to log an accident, so your insurer pack includes where it happened.</string>
-	<key>NSContactsUsageDescription</key>
-	<string>Lyneqo Caravan &amp; Motorhome can copy your name, address and phone from a contact you choose — typically My Card — when you record an accident, so you can share them with the other driver. Details are stored on that incident only.</string>
 </dict>
 </plist>
