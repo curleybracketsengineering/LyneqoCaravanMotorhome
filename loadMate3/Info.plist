@@ -14,7 +14,5 @@
 	<string>Lyneqo Caravan &amp; Motorhome can record your approximate location if you choose to log an accident, so your insurer pack includes where it happened.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>Lyneqo Caravan &amp; Motorhome can copy your name, address and phone from a contact you choose — typically My Card — when you record an accident, so you can share them with the other driver. Details are stored on that incident only.</string>
-	<key>ZYFY_API_KEY</key>
-	<string>$(ZYFY_API_KEY)</string>
 </dict>
 </plist>

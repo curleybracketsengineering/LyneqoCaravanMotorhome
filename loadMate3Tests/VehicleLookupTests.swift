@@ -190,12 +190,17 @@ final class VehicleLookupTests: XCTestCase {
 
     func testZyfyLookupSuccessUsesMockedSession() async throws {
         MockURLProtocol.requestHandler = { request in
-            XCTAssertEqual(request.value(forHTTPHeaderField: "X-Api-Key"), "test-key")
-            XCTAssertEqual(request.url?.path, "/v1/vehicle/AB12CDE")
+            XCTAssertNil(request.value(forHTTPHeaderField: "X-Api-Key"))
+            XCTAssertEqual(request.url?.host, "api.lyneqo.com")
+            XCTAssertEqual(request.url?.path, "/v1/vehicle")
+            XCTAssertEqual(
+                URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems,
+                [URLQueryItem(name: "registration", value: "AB12CDE")]
+            )
             return (Self.http(200), Data(Self.successfulZyfyJSON.utf8))
         }
 
-        let service = ZyfyVehicleLookupService(session: Self.mockSession(), apiKey: "test-key")
+        let service = ZyfyVehicleLookupService(session: Self.mockSession())
         let result = try await service.lookup(registration: "AB12 CDE", forceRefresh: false)
 
         XCTAssertEqual(result.make, "VOLKSWAGEN")
@@ -208,7 +213,7 @@ final class VehicleLookupTests: XCTestCase {
             return (Self.http(400), Data(body.utf8))
         }
 
-        let service = ZyfyVehicleLookupService(session: Self.mockSession(), apiKey: "test-key")
+        let service = ZyfyVehicleLookupService(session: Self.mockSession())
         do {
             _ = try await service.lookup(registration: "AB12CDE", forceRefresh: false)
             XCTFail("Expected invalid registration")
@@ -225,24 +230,12 @@ final class VehicleLookupTests: XCTestCase {
             return (Self.http(404), Data(body.utf8))
         }
 
-        let service = ZyfyVehicleLookupService(session: Self.mockSession(), apiKey: "test-key")
+        let service = ZyfyVehicleLookupService(session: Self.mockSession())
         do {
             _ = try await service.lookup(registration: "AB12CDE", forceRefresh: false)
             XCTFail("Expected not found")
         } catch let error as VehicleLookupError {
             XCTAssertEqual(error, .notFound)
-        } catch {
-            XCTFail("Unexpected error \(error)")
-        }
-    }
-
-    func testZyfyMissingAPIKeyIsConfigurationError() async {
-        let service = ZyfyVehicleLookupService(session: Self.mockSession(), apiKey: "  ")
-        do {
-            _ = try await service.lookup(registration: "AB12CDE", forceRefresh: false)
-            XCTFail("Expected configuration error")
-        } catch let error as VehicleLookupError {
-            XCTAssertEqual(error, .configuration)
         } catch {
             XCTFail("Unexpected error \(error)")
         }
@@ -263,7 +256,7 @@ final class VehicleLookupTests: XCTestCase {
             return (Self.http(429), Data(body.utf8))
         }
 
-        let service = ZyfyVehicleLookupService(session: Self.mockSession(), apiKey: "test-key")
+        let service = ZyfyVehicleLookupService(session: Self.mockSession())
         do {
             _ = try await service.lookup(registration: "AB12CDE", forceRefresh: false)
             XCTFail("Expected quota exhausted")
@@ -283,7 +276,7 @@ final class VehicleLookupTests: XCTestCase {
             )
         }
 
-        let service = ZyfyVehicleLookupService(session: Self.mockSession(), apiKey: "test-key")
+        let service = ZyfyVehicleLookupService(session: Self.mockSession())
         do {
             _ = try await service.lookup(registration: "AB12CDE", forceRefresh: false)
             XCTFail("Expected quota exhausted")
@@ -306,7 +299,6 @@ final class VehicleLookupTests: XCTestCase {
 
         let service = ZyfyVehicleLookupService(
             session: Self.mockSession(),
-            apiKey: "test-key",
             maxRetryAfterSeconds: 0
         )
         do {
@@ -414,7 +406,7 @@ final class VehicleLookupTests: XCTestCase {
         var fields = ["Content-Type": "application/json"]
         headers.forEach { fields[$0.key] = $0.value }
         return HTTPURLResponse(
-            url: URL(string: "https://zyfy.uk/v1/vehicle/AB12CDE")!,
+            url: URL(string: "https://api.lyneqo.com/v1/vehicle?registration=AB12CDE")!,
             statusCode: status,
             httpVersion: "HTTP/1.1",
             headerFields: fields

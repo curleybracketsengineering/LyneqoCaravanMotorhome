@@ -1,7 +1,4 @@
 // Shared build settings for Lyneqo.
-// Secrets.xcconfig is optional so clones and CI still compile without a local key.
+// Vehicle lookup goes through https://api.lyneqo.com. The Zyfy key is a
+// Cloudflare secret and is not compiled into the app.
 #include? "Secrets.xcconfig"
-
-// Phase 1: ZYFY_API_KEY is embedded in the iOS app via Info.plist. This is
-// intentionally temporary and will move to a Lyneqo backend. A key shipped
-// inside an iOS binary cannot be genuinely secured.

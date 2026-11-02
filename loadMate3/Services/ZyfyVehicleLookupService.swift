@@ -1,25 +1,21 @@
 import Foundation
 
-/// Zyfy-only vehicle lookup. All provider-specific HTTP, DTO, and mapping stay here.
-/// Phase 1 embeds the Zyfy API key in the app; this will move to a Lyneqo backend later.
+/// Vehicle lookup through the Lyneqo proxy. The proxy holds the Zyfy key and returns Zyfy's JSON.
 final class ZyfyVehicleLookupService: VehicleLookupProviding, @unchecked Sendable {
-    static let defaultBaseURL = URL(string: "https://zyfy.uk/v1")!
+    static let defaultBaseURL = URL(string: "https://api.lyneqo.com/v1")!
 
     private let session: URLSession
-    private let apiKey: String
     private let baseURL: URL
     private let maxEnrichmentAttempts: Int
     private let maxRetryAfterSeconds: TimeInterval
 
     init(
         session: URLSession = .shared,
-        apiKey: String,
         baseURL: URL = defaultBaseURL,
         maxEnrichmentAttempts: Int = 3,
         maxRetryAfterSeconds: TimeInterval = 15
     ) {
         self.session = session
-        self.apiKey = apiKey
         self.baseURL = baseURL
         self.maxEnrichmentAttempts = max(1, maxEnrichmentAttempts)
         self.maxRetryAfterSeconds = maxRetryAfterSeconds
@@ -30,18 +26,12 @@ final class ZyfyVehicleLookupService: VehicleLookupProviding, @unchecked Sendabl
         guard !normalized.isEmpty else {
             throw VehicleLookupError.invalidRegistration
         }
-        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedKey.isEmpty else {
-            throw VehicleLookupError.configuration
+        guard let url = lookupURL(registration: normalized) else {
+            throw VehicleLookupError.unexpectedResponse
         }
-
-        var url = baseURL
-        url.append(path: "vehicle")
-        url.append(path: normalized)
 
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue(trimmedKey, forHTTPHeaderField: "X-Api-Key")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         var lastWasPending = false
@@ -109,8 +99,8 @@ final class ZyfyVehicleLookupService: VehicleLookupProviding, @unchecked Sendabl
                 throw VehicleLookupError.notFound
             }
             throw VehicleLookupError.invalidRegistration
-        case 401, 403:
-            throw VehicleLookupError.configuration
+        case 401, 403, 503:
+            throw VehicleLookupError.serviceUnavailable
         case 404:
             throw VehicleLookupError.notFound
         case 429:
@@ -163,6 +153,15 @@ final class ZyfyVehicleLookupService: VehicleLookupProviding, @unchecked Sendabl
             }
         }
         return .serviceUnavailable
+    }
+
+    private func lookupURL(registration: String) -> URL? {
+        let endpoint = baseURL.appending(path: "vehicle")
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        components.queryItems = [URLQueryItem(name: "registration", value: registration)]
+        return components.url
     }
 
     private func sleepRetryAfter(_ http: HTTPURLResponse) async throws {

@@ -6,10 +6,8 @@ protocol VehicleLookupProviding: Sendable {
 }
 
 /// Facade used by the rest of the app. Owns registration normalisation and a short-lived in-memory cache.
-/// Swap the inner provider (Zyfy today, Lyneqo backend later) without changing views.
 final class VehicleLookupService: VehicleLookupProviding, @unchecked Sendable {
     static let defaultCacheTTL: TimeInterval = 24 * 60 * 60
-    static let infoPlistAPIKeyName = "ZYFY_API_KEY"
 
     private let provider: any VehicleLookupProviding
     private let cacheTTL: TimeInterval
@@ -47,12 +45,10 @@ final class VehicleLookupService: VehicleLookupProviding, @unchecked Sendable {
         return result
     }
 
-    /// Phase 1 live stack. The Zyfy key is read from Info.plist (xcconfig). This embedding is temporary and will move server-side.
+    /// Live stack. Calls the Lyneqo vehicle proxy; the Zyfy key stays on the server.
     static func makeLive(session: URLSession = .shared) -> VehicleLookupService {
-        let apiKey = (Bundle.main.object(forInfoDictionaryKey: infoPlistAPIKeyName) as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return VehicleLookupService(
-            provider: ZyfyVehicleLookupService(session: session, apiKey: apiKey)
+        VehicleLookupService(
+            provider: ZyfyVehicleLookupService(session: session)
         )
     }
 

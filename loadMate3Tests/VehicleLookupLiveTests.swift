@@ -1,7 +1,7 @@
 import XCTest
 @testable import loadMate3
 
-/// Optional live Zyfy lookups. Skipped unless `ZYFY_LIVE_TESTS=1`.
+/// Optional live lookups through the Lyneqo proxy. Skipped unless `ZYFY_LIVE_TESTS=1`.
 ///
 /// Known motorhome plates for occasional checks (DVLA make/model is the base vehicle):
 /// - HX13 FKE — Swift Lifestyle 686 (2013), DVLA: FIAT DUCATO
@@ -12,19 +12,10 @@ import XCTest
 /// - KX65 CEO — Auto-Trail Tracker RB (2015)
 @MainActor
 final class VehicleLookupLiveTests: XCTestCase {
-    private var apiKey: String {
-        (Bundle.main.object(forInfoDictionaryKey: VehicleLookupService.infoPlistAPIKeyName) as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
     override func setUpWithError() throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["ZYFY_LIVE_TESTS"] == "1",
-            "Set ZYFY_LIVE_TESTS=1 to run live Zyfy lookups (uses monthly quota)."
-        )
-        try XCTSkipUnless(
-            !apiKey.isEmpty,
-            "ZYFY_API_KEY is not configured on this build."
+            "Set ZYFY_LIVE_TESTS=1 to run live lookups through the Lyneqo proxy (uses monthly quota)."
         )
     }
 
@@ -52,7 +43,7 @@ final class VehicleLookupLiveTests: XCTestCase {
 
     private func liveLookup(_ registration: String) async throws -> VehicleLookupResult {
         let service = VehicleLookupService(
-            provider: ZyfyVehicleLookupService(session: .shared, apiKey: apiKey),
+            provider: ZyfyVehicleLookupService(session: .shared),
             cacheTTL: 0
         )
         return try await service.lookup(registration: registration, forceRefresh: true)
